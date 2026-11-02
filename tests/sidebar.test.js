@@ -1,0 +1,280 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const vm = require('node:vm');
+
+function loadExtension(pluginContent) {
+	let provider;
+	let renamed = false;
+	const errors = [];
+	const messages = [];
+	const requests = [];
+	const responses = { active: { data: {} }, compact: { data: { type: 'compaction' } } };
+	const vscode = {
+		workspace: { workspaceFolders: [{ uri: { fsPath: 'workspace' } }] },
+		window: {
+			registerWebviewViewProvider(id, value) { provider = value; },
+			showErrorMessage(message) { errors.push(message); }
+		},
+		commands: { registerCommand() {}, executeCommand() {} },
+		Uri: { joinPath(uri, ...parts) { return parts.join('/'); } }
+	};
+	const modules = {
+		vscode,
+		fs: {
+			existsSync() { return pluginContent !== undefined; },
+			readFileSync() { return pluginContent; },
+			renameSync(from, to) {
+				assert.match(from, /opencode-sidebar-completion\.js$/);
+				assert.match(to, /\.js\.disabled-\d+$/);
+				renamed = true;
+			}
+		},
+		'./telegram': require('../telegram'),
+		'./webui': {
+			async apiGet(binary, cwd, endpoint) { requests.push(endpoint); return responses.active; },
+			async apiPost(binary, cwd, endpoint, body) { requests.push({ endpoint, body }); return responses.compact; }
+		}
+	};
+	const sandbox = { module: { exports: {} }, require: (id) => modules[id] || require(id) };
+	vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8'), sandbox);
+	sandbox.module.exports.activate({ extensionUri: { fsPath: 'extension' }, subscriptions: [] });
+	provider.cliBinary = '';
+	provider.view = { webview: { postMessage(message) { messages.push(message); } } };
+	return { provider, responses, requests, messages, errors, renamed };
+}
+
+test('старый плагин отключается с сохранением резервной копии', () => {
+	const state = loadExtension("export default { id: 'opencode-sidebar.completion' }");
+	assert.equal(state.renamed, true);
+	assert.deepEqual(state.errors, []);
+});
+
+test('отсутствующий или неизвестный плагин не удаляется', () => {
+	assert.equal(loadExtension().renamed, false);
+	const unknown = loadExtension('Пользовательский файл');
+	assert.equal(unknown.renamed, false);
+	assert.equal(unknown.errors.length, 1);
+});
+
+test('сжатие отправляет штатный запрос для выбранной сессии', async () => {
+	const state = loadExtension();
+	await state.provider.onMessage({ type: 'compact', sessionID: 'ses_test' });
+	assert.equal(state.requests[0], '/api/session/active');
+	assert.equal(state.requests[1].endpoint, '/api/session/ses_test/compact');
+	assert.equal(JSON.stringify(state.requests[1].body), '{}');
+	assert.equal(state.messages[0].type, 'compactRequested');
+	assert.equal(state.messages[0].ok, true);
+});
+
+test('во время ответа сжатие не запускается', async () => {
+	const state = loadExtension();
+	state.responses.active = { data: { ses_test: { type: 'running' } } };
+	await state.provider.onMessage({ type: 'compact', sessionID: 'ses_test' });
+	assert.equal(state.requests.length, 1);
+	assert.equal(state.messages[0].ok, false);
+});
+
+test('нет подтверждения сервиса — нет ложного сообщения об успехе', async () => {
+	const state = loadExtension();
+	state.responses.compact = {};
+	await state.provider.onMessage({ type: 'compact', sessionID: 'ses_test' });
+	assert.equal(state.messages[0].ok, false);
+});
+
+test('панель содержит «Сжать контекст» и не содержит карточку итогов', () => {
+	const state = loadExtension();
+	const webview = { cspSource: 'test:', asWebviewUri(value) { return value; }, onDidReceiveMessage() {} };
+	state.provider.resolveWebviewView({ webview, visible: true, onDidChangeVisibility() {}, onDidDispose() {} });
+	assert.match(webview.html, /id="compact-btn"[^>]*>Сжать контекст<\/button>/);
+	assert.doesNotMatch(webview.html, /session-result/);
+	const panel = fs.readFileSync(path.join(__dirname, '..', 'media', 'panel.js'), 'utf8');
+	assert.doesNotMatch(panel, /sessionResult|renderResult|requestResult|resultRequest/);
+	assert.match(panel, /telegramInstall/);
+	assert.match(panel, /rec-input/);
+	assert.match(panel, /rec-prereq/);
+	assert.match(panel, /full-open/);
+	assert.match(panel, /openFull/);
+	assert.doesNotMatch(panel, /buttons\.install/);
+	const extension = fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8');
+	assert.match(extension, /type === 'closeFull'/);
+	assert.match(extension, /workbench\.action\.closeSidebar/);
+	assert.match(extension, /full-back/);
+});
+
+function loadRecommended(manifest, prepare) {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sidebar-rec-'));
+	const extension = path.join(root, 'extension');
+	fs.mkdirSync(path.join(extension, 'skills'), { recursive: true });
+	fs.writeFileSync(path.join(extension, 'skills', 'manifest.json'), JSON.stringify({ skills: manifest }));
+	const home = path.join(root, 'home');
+	fs.mkdirSync(home, { recursive: true });
+	if (prepare) prepare({ root, extension, home });
+	const sandbox = {
+		module: { exports: {} },
+		process,
+		require: (id) => {
+			if (id === 'vscode') return { workspace: { workspaceFolders: [] } };
+			if (id === 'os') return Object.assign({}, os, { homedir: () => home });
+			if (id.startsWith('./')) return require(path.join(__dirname, '..', id));
+			return require(id);
+		}
+	};
+	vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8'), sandbox);
+	return { root, extension, home, readRecommended: sandbox.module.exports.readRecommended, addMcpServer: sandbox.module.exports.addMcpServer, installSkill: sandbox.module.exports.installSkill };
+}
+
+function installSkillFiles(home, id) {
+	const dir = path.join(home, '.config', 'opencode', 'skills', id);
+	fs.mkdirSync(dir, { recursive: true });
+	fs.writeFileSync(path.join(dir, 'SKILL.md'), '# ' + id);
+}
+
+test('скилл без драйвера и MCP не считается готовым', () => {
+	const state = loadRecommended(
+		[{
+			id: 'cua-driver',
+			requires: { binary: 'cua-driver-not-installed-xyz', mcp: 'cua-driver' },
+			setup: { binary: { command: 'true' }, mcp: { type: 'local', command: ['cua-driver', 'mcp'] } }
+		}],
+		({ home }) => installSkillFiles(home, 'cua-driver')
+	);
+	const item = state.readRecommended({ fsPath: state.extension })[0];
+	assert.equal(item.installed, true);
+	assert.equal(item.ready, false);
+	assert.equal(item.fixable, true);
+	assert.equal(item.missing.join(' | '), 'не найден cua-driver-not-installed-xyz | нет MCP cua-driver в opencode.json');
+});
+
+test('без setup недостающие зависимости не чинятся автоматически', () => {
+	const state = loadRecommended(
+		[{ id: 'cua-driver', requires: { binary: 'cua-driver-not-installed-xyz' } }],
+		({ home }) => installSkillFiles(home, 'cua-driver')
+	);
+	const item = state.readRecommended({ fsPath: state.extension })[0];
+	assert.equal(item.fixable, false);
+});
+
+test('скилл с драйвером и MCP считается установленным', () => {
+	const state = loadRecommended(
+		[{ id: 'cua-driver', requires: { binary: 'node', mcp: 'cua-driver' } }],
+		({ home }) => {
+			installSkillFiles(home, 'cua-driver');
+			fs.writeFileSync(
+				path.join(home, '.config', 'opencode', 'opencode.json'),
+				JSON.stringify({ mcp: { servers: { 'cua-driver': { type: 'local', command: ['cua-driver', 'mcp'] } } } })
+			);
+		}
+	);
+	const item = state.readRecommended({ fsPath: state.extension })[0];
+	assert.equal(item.ready, true);
+	assert.equal(item.missing.length, 0);
+});
+
+test('скилл без требований считается установленным по файлам', () => {
+	const state = loadRecommended([{ id: 'find-skills' }], ({ home }) => installSkillFiles(home, 'find-skills'));
+	const item = state.readRecommended({ fsPath: state.extension })[0];
+	assert.equal(item.ready, true);
+});
+
+test('MCP-сервер добавляется в mcp.servers с резервной копией', () => {
+	const state = loadRecommended([], ({ home }) => {
+		fs.mkdirSync(path.join(home, '.config', 'opencode'), { recursive: true });
+		fs.writeFileSync(
+			path.join(home, '.config', 'opencode', 'opencode.json'),
+			JSON.stringify({ mcp: { servers: { obscura: { type: 'local', command: ['obscura', 'mcp'] } } } })
+		);
+	});
+	const file = path.join(state.home, '.config', 'opencode', 'opencode.json');
+	state.addMcpServer('cua-driver', { type: 'local', command: ['cua-driver', 'mcp'] });
+	const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+	assert.deepEqual(Object.keys(config.mcp.servers).sort(), ['cua-driver', 'obscura']);
+	const backups = fs.readdirSync(path.join(state.home, '.config', 'opencode')).filter((name) => name.startsWith('opencode.json.bak-'));
+	assert.equal(backups.length, 1);
+});
+
+test('graphify и find-skills устанавливаются через приложение', () => {
+	for (const id of ['graphify', 'find-skills']) {
+		const state = loadRecommended([{ id }]);
+		const target = state.installSkill({ fsPath: path.join(__dirname, '..') }, id);
+		assert.equal(target, path.join(state.home, '.config', 'opencode', 'skills', id));
+		assert.equal(fs.existsSync(path.join(target, 'SKILL.md')), true);
+		if (id === 'graphify') {
+			assert.equal(fs.existsSync(path.join(target, 'references', 'query.md')), true);
+		}
+		const item = state.readRecommended({ fsPath: state.extension })[0];
+		assert.equal(item.installed, true);
+	}
+});
+
+test('учётные данные Telegram пишутся в .env с правами 600', () => {
+	const telegram = require('../telegram');
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sidebar-tg-'));
+	const previous = process.env.XDG_CONFIG_HOME;
+	process.env.XDG_CONFIG_HOME = dir;
+	try {
+		const token = '123456:abcdefghijklmnopqrstuvwxyzABCDE';
+		telegram.writeCredentials(token, '123456789');
+		const file = path.join(dir, 'opencode-telegram-bot', '.env');
+		const body = fs.readFileSync(file, 'utf8');
+		assert.match(body, /TELEGRAM_BOT_TOKEN=123456:/);
+		assert.match(body, /TELEGRAM_ALLOWED_USER_ID=123456789/);
+		assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+		assert.throws(() => telegram.validateCredentials('плохой', '123'), /Токен/);
+		assert.throws(() => telegram.validateCredentials(token, '12a'), /ID/);
+	} finally {
+		if (previous === undefined) {
+			delete process.env.XDG_CONFIG_HOME;
+		} else {
+			process.env.XDG_CONFIG_HOME = previous;
+		}
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test('неудачный поиск CLI не кэшируется навсегда', async () => {	if (process.platform === 'win32') {
+		return;
+	}
+	const telegramPath = require.resolve('../telegram');
+	const telegram = require(telegramPath);
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sidebar-tg-'));
+	const bin = path.join(dir, 'bin');
+	const root = path.join(dir, 'root');
+	fs.mkdirSync(bin, { recursive: true });
+	fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/sh\n[ "$1" = root ] && echo "$FAKE_ROOT"\n', { mode: 0o755 });
+	const previousPath = process.env.PATH;
+	const previousRoot = process.env.FAKE_ROOT;
+	process.env.PATH = bin + path.delimiter + previousPath;
+	process.env.FAKE_ROOT = root;
+	try {
+		const home = path.join(dir, 'home');
+		const before = await telegram.status(home);
+		assert.equal(before.installed, false);
+		const cli = path.join(root, '@grinev', 'opencode-telegram-bot', 'dist', 'cli.js');
+		fs.mkdirSync(path.dirname(cli), { recursive: true });
+		fs.writeFileSync(cli, 'console.log("Service status: running");\n');
+		const after = await telegram.status(home);
+		assert.equal(after.installed, true);
+	} finally {
+		process.env.PATH = previousPath;
+		if (previousRoot === undefined) {
+			delete process.env.FAKE_ROOT;
+		} else {
+			process.env.FAKE_ROOT = previousRoot;
+		}
+		delete require.cache[telegramPath];
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test('проверка версии Node учитывает 22.14', () => {
+	const telegram = require('../telegram');
+	assert.equal(telegram.versionAtLeast('v22.14.0', 22, 14), true);
+	assert.equal(telegram.versionAtLeast('v24.1.0', 22, 14), true);
+	assert.equal(telegram.versionAtLeast('v22.13.9', 22, 14), false);
+	assert.equal(telegram.versionAtLeast('', 22, 14), false);
+});

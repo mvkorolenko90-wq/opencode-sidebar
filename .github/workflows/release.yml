@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Verify version matches tag
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "Версия в package.json (${version}) не совпадает с тегом ${GITHUB_REF_NAME}." >&2
+            exit 1
+          fi
+
+      - name: Check and test
+        run: npm run check
+
+      - name: Package VSIX
+        run: npx --yes @vscode/vsce package --out "opencode-sidebar-${GITHUB_REF_NAME#v}.vsix"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          file="opencode-sidebar-${GITHUB_REF_NAME#v}.vsix"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$file" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$file" \
+              --title "opencode Sidebar ${GITHUB_REF_NAME#v}" \
+              --generate-notes
+          fi

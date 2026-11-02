@@ -1,0 +1,149 @@
+{
+  "name": "opencode-sidebar",
+  "displayName": "opencode Sidebar",
+  "description": "Иконка opencode в Activity Bar и встроенный web-интерфейс opencode.",
+  "version": "0.9.24",
+  "publisher": "myai",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mvkorolenko90-wq/opencode-sidebar.git"
+  },
+  "homepage": "https://github.com/mvkorolenko90-wq/opencode-sidebar#readme",
+  "bugs": {
+    "url": "https://github.com/mvkorolenko90-wq/opencode-sidebar/issues"
+  },
+  "engines": {
+    "vscode": "^1.94.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "opencode",
+    "terminal",
+    "sidebar",
+    "activity bar"
+  ],
+  "activationEvents": [
+    "onView:opencodeSidebar.main",
+    "onCommand:opencodeSidebar.newTab",
+    "onCommand:opencodeSidebar.openFull",
+    "onCommand:opencodeSidebar.reloadUi",
+    "onCommand:opencodeSidebar.openTerminal",
+    "onCommand:opencodeSidebar.telegramStatus",
+    "onCommand:opencodeSidebar.telegramStart",
+    "onCommand:opencodeSidebar.telegramStop",
+    "onCommand:opencodeSidebar.telegramRestart",
+    "onCommand:opencodeSidebar.telegramAutostart"
+  ],
+  "main": "./extension.js",
+  "scripts": {
+    "check": "node --check extension.js && node --check webui.js && node --check telegram.js && node --check media/panel.js && node --test tests/sidebar.test.js",
+    "package": "node -e \"for (const f of require('fs').readdirSync('.')) if (f.endsWith('.vsix')) require('fs').unlinkSync(f)\" && npx --yes @vscode/vsce package --allow-missing-repository"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "opencodeSidebar",
+          "title": "opencode",
+          "icon": "media/opencode.svg"
+        }
+      ]
+    },
+    "views": {
+      "opencodeSidebar": [
+        {
+          "type": "webview",
+          "id": "opencodeSidebar.main",
+          "name": "opencode"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "opencodeSidebar.newTab",
+        "title": "opencode: Новая вкладка",
+        "icon": "$(add)"
+      },
+      {
+        "command": "opencodeSidebar.reloadUi",
+        "title": "opencode: Перезагрузить интерфейс",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "opencodeSidebar.openFull",
+        "title": "opencode: Открыть на весь экран",
+        "icon": "$(screen-full)"
+      },
+      {
+        "command": "opencodeSidebar.openTerminal",
+        "title": "opencode: Открыть в терминале",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "opencodeSidebar.telegramStatus",
+        "title": "Telegram-бот: Статус"
+      },
+      {
+        "command": "opencodeSidebar.telegramStart",
+        "title": "Telegram-бот: Запустить"
+      },
+      {
+        "command": "opencodeSidebar.telegramStop",
+        "title": "Telegram-бот: Остановить"
+      },
+      {
+        "command": "opencodeSidebar.telegramRestart",
+        "title": "Telegram-бот: Перезапустить"
+      },
+      {
+        "command": "opencodeSidebar.telegramAutostart",
+        "title": "Telegram-бот: Автозапуск вкл/выкл"
+      }
+    ],
+    "configuration": {
+      "title": "opencode Sidebar",
+      "properties": {
+        "opencodeSidebar.telegramPath": {
+          "type": "string",
+          "default": "",
+          "description": "Папка проекта opencode-telegram с файлом control.mjs. Пусто — автопоиск: рабочая папка, ~/opencode-telegram."
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "opencodeSidebar.newTab",
+        "key": "ctrl+shift+t",
+        "when": "opencodeSidebarOpen"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "opencodeSidebar.reloadUi",
+          "group": "navigation@1"
+        },
+        {
+          "command": "opencodeSidebar.openTerminal",
+          "group": "navigation@2"
+        },
+        {
+          "command": "opencodeSidebar.openFull",
+          "group": "navigation@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "opencodeSidebar.reloadUi",
+          "when": "false"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "skills": [
+    {
+      "id": "cua-driver",
+      "title": "CUA Driver — управление компьютером",
+      "description": "Агент кликает по элементам, вводит текст, читает окна и управляет браузером. Для работы нужен установленный драйвер cua-driver и запись mcp в конфиге opencode.",
+      "requires": { "binary": "cua-driver", "mcp": "cua-driver" },
+      "setup": {
+        "binary": {
+          "command": "curl -fsSL https://cua.ai/driver/install.sh | bash",
+          "windows": "irm https://cua.ai/driver/install.ps1 | iex"
+        },
+        "mcp": {
+          "type": "local",
+          "command": ["cua-driver", "mcp"]
+        }
+      }
+    },
+    {
+      "id": "find-skills",
+      "title": "Find Skills — поиск и установка скиллов",
+      "description": "Помогает найти готовый скилл под задачу и установить его. Агент ищет по каталогу скиллов и предлагает подходящий вместо написания с нуля.",
+      "requires": { "binary": "npx" }
+    },
+    {
+      "id": "graphify",
+      "title": "Graphify — граф знаний по проекту",
+      "description": "Превращает папку с файлами в граф знаний: связи между файлами, сообщества, отчёт и интерактивная HTML-схема. Помогает отвечать на вопросы об архитектуре проекта, не читая весь код.",
+      "requires": { "binary": "graphify" },
+      "setup": {
+        "binary": {
+          "command": "uv tool install --upgrade graphifyy -q",
+          "windows": "uv tool install --upgrade graphifyy -q"
+        }
+      }
+    },
+    {
+      "id": "telegram",
+      "title": "Telegram — OpenCode в Telegram",
+      "description": "Готовый бот @grinev/opencode-telegram-bot: установка одной командой на Windows и Linux, запуск, остановка и выбор рабочей папки через /projects и /open. История задач остаётся в проекте OpenCode."
+    },
+    {
+      "id": "orchestrator",
+      "type": "agent",
+      "title": "Orchestrator — несколько агентов",
+      "description": "Добавляет агента-оркестратора: делит задачу между architect, explore, reviewer и debugger и собирает итог. Запись вставляется в ~/.config/opencode/opencode.json с бэкапом."
+    }
+  ]
+}
