@@ -4,6 +4,8 @@
 .vscode/**
 AGENTS.md
 install.sh
+update.sh
+update.ps1
 scripts/**
 docs/**
 *.vsix

@@ -2,7 +2,7 @@
   "name": "opencode-sidebar",
   "displayName": "opencode Sidebar",
   "description": "Иконка opencode в Activity Bar и встроенный web-интерфейс opencode.",
-  "version": "0.9.24",
+  "version": "0.9.25",
   "publisher": "myai",
   "license": "MIT",
   "repository": {
@@ -39,7 +39,7 @@
   ],
   "main": "./extension.js",
   "scripts": {
-    "check": "node --check extension.js && node --check webui.js && node --check telegram.js && node --check media/panel.js && node --test tests/sidebar.test.js",
+    "check": "node --check extension.js && node --check webui.js && node --check telegram.js && node --check updates.js && node --check media/panel.js && node --test tests/sidebar.test.js",
     "package": "node -e \"for (const f of require('fs').readdirSync('.')) if (f.endsWith('.vsix')) require('fs').unlinkSync(f)\" && npx --yes @vscode/vsce package --allow-missing-repository"
   },
   "extensionKind": [

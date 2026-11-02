@@ -19,7 +19,8 @@
     const sessionBack = document.getElementById('session-back');
     const costEl = document.getElementById('session-cost');
     const agentSelect = document.getElementById('agent-select');
-    const agentBar = document.getElementById('agent-bar');
+    const agentControls = document.getElementById('agent-controls');
+    const updateBtn = document.getElementById('update-btn');
     const graphifyBtn = document.getElementById('graphify-btn');
 	const compactBtn = document.getElementById('compact-btn');
     const modelSelect = document.getElementById('model-select');
@@ -210,12 +211,12 @@
     function updateAgentUi(tab) {
       const sessionID = tab ? sessionIdOf(tab) : '';
       if (!sessionID) {
-        agentBar.hidden = true;
+        agentControls.hidden = true;
         return;
       }
       loadAgents();
       loadModels();
-      agentBar.hidden = false;
+      agentControls.hidden = false;
       if (tab.agent) {
         agentSelect.value = tab.agent;
       }
@@ -277,6 +278,74 @@
       graphifyBtn.title = 'Запускаю graphify…';
       vscode.postMessage({ type: 'graphify', sessionID: sessionID });
     });
+
+    let updateTimer = null;
+
+    function setUpdateState(state, message) {
+      if (!updateBtn) {
+        return;
+      }
+      if (updateTimer) {
+        clearTimeout(updateTimer);
+        updateTimer = null;
+      }
+      updateBtn.classList.remove('ok', 'warn', 'fail');
+      updateBtn.disabled = false;
+      const version = message && message.version ? message.version : '';
+      if (state === 'checking') {
+        updateBtn.disabled = true;
+        updateBtn.textContent = '⟳';
+        updateBtn.title = 'Проверяю обновления…';
+        return;
+      }
+      if (state === 'current') {
+        updateBtn.classList.add('ok');
+        updateBtn.textContent = '✓';
+        updateBtn.title = 'Установлена последняя версия' + (version ? ': ' + version : '');
+        updateTimer = setTimeout(function () {
+          setUpdateState('idle');
+        }, 4000);
+        return;
+      }
+      if (state === 'downloading') {
+        updateBtn.disabled = true;
+        updateBtn.classList.add('warn');
+        updateBtn.textContent = '⤓';
+        updateBtn.title = 'Скачиваю' + (version ? ' ' + version : '') + '…';
+        return;
+      }
+      if (state === 'installing') {
+        updateBtn.disabled = true;
+        updateBtn.classList.add('warn');
+        updateBtn.textContent = '⤓';
+        updateBtn.title = 'Устанавливаю' + (version ? ' ' + version : '') + '…';
+        return;
+      }
+      if (state === 'done') {
+        updateBtn.classList.add('ok');
+        updateBtn.textContent = '⬆';
+        updateBtn.title = 'Обновлено' + (version ? ' до ' + version : '') + '. Перезагрузите окно VS Code.';
+        return;
+      }
+      if (state === 'error') {
+        updateBtn.classList.add('fail');
+        updateBtn.textContent = '⬆';
+        updateBtn.title = 'Не удалось обновить: ' + ((message && message.message) || 'ошибка');
+        return;
+      }
+      updateBtn.textContent = '⬆';
+      updateBtn.title = 'Проверить обновления расширения';
+    }
+
+    if (updateBtn) {
+      updateBtn.addEventListener('click', function () {
+        if (updateBtn.disabled) {
+          return;
+        }
+        setUpdateState('checking');
+        vscode.postMessage({ type: 'checkUpdates' });
+      });
+    }
 
     agentSelect.addEventListener('change', function () {
       const tab = activeTab();
@@ -990,6 +1059,11 @@
 
       if (message.type === 'capabilities') {
         graphifyBtn.hidden = !message.graphify;
+        return;
+      }
+
+      if (message.type === 'updateStatus') {
+        setUpdateState(message.state, message);
         return;
       }
 

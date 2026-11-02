@@ -7,21 +7,29 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function loadExtension(pluginContent) {
+function loadExtension(pluginContent, options = {}) {
 	let provider;
 	let renamed = false;
 	const errors = [];
 	const messages = [];
 	const requests = [];
+	const commands = [];
 	const responses = { active: { data: {} }, compact: { data: { type: 'compaction' } } };
 	const vscode = {
 		workspace: { workspaceFolders: [{ uri: { fsPath: 'workspace' } }] },
 		window: {
 			registerWebviewViewProvider(id, value) { provider = value; },
-			showErrorMessage(message) { errors.push(message); }
+			showErrorMessage(message) { errors.push(message); },
+			async showInformationMessage() { return 'Позже'; }
 		},
-		commands: { registerCommand() {}, executeCommand() {} },
-		Uri: { joinPath(uri, ...parts) { return parts.join('/'); } }
+		commands: {
+			registerCommand() {},
+			async executeCommand(command) { commands.push(command); }
+		},
+		Uri: {
+			joinPath(uri, ...parts) { return parts.join('/'); },
+			file(value) { return { fsPath: value }; }
+		}
 	};
 	const modules = {
 		vscode,
@@ -35,6 +43,7 @@ function loadExtension(pluginContent) {
 			}
 		},
 		'./telegram': require('../telegram'),
+		'./updates': options.updates || require('../updates'),
 		'./webui': {
 			async apiGet(binary, cwd, endpoint) { requests.push(endpoint); return responses.active; },
 			async apiPost(binary, cwd, endpoint, body) { requests.push({ endpoint, body }); return responses.compact; }
@@ -42,10 +51,14 @@ function loadExtension(pluginContent) {
 	};
 	const sandbox = { module: { exports: {} }, require: (id) => modules[id] || require(id) };
 	vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8'), sandbox);
-	sandbox.module.exports.activate({ extensionUri: { fsPath: 'extension' }, subscriptions: [] });
+	sandbox.module.exports.activate({
+		extensionUri: { fsPath: 'extension' },
+		subscriptions: [],
+		extension: { packageJSON: { version: options.version || '0.0.0' } }
+	});
 	provider.cliBinary = '';
 	provider.view = { webview: { postMessage(message) { messages.push(message); } } };
-	return { provider, responses, requests, messages, errors, renamed };
+	return { provider, responses, requests, messages, errors, renamed, commands };
 }
 
 test('старый плагин отключается с сохранением резервной копии', () => {
@@ -91,6 +104,7 @@ test('панель содержит «Сжать контекст» и не со
 	const webview = { cspSource: 'test:', asWebviewUri(value) { return value; }, onDidReceiveMessage() {} };
 	state.provider.resolveWebviewView({ webview, visible: true, onDidChangeVisibility() {}, onDidDispose() {} });
 	assert.match(webview.html, /id="compact-btn"[^>]*>Сжать контекст<\/button>/);
+	assert.match(webview.html, /id="update-btn"[^>]*title="Проверить обновления расширения"/);
 	assert.doesNotMatch(webview.html, /session-result/);
 	const panel = fs.readFileSync(path.join(__dirname, '..', 'media', 'panel.js'), 'utf8');
 	assert.doesNotMatch(panel, /sessionResult|renderResult|requestResult|resultRequest/);
@@ -106,8 +120,55 @@ test('панель содержит «Сжать контекст» и не со
 	assert.match(extension, /full-back/);
 });
 
-function loadRecommended(manifest, prepare) {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sidebar-rec-'));
+test('сравнение версий считает новые релизы новее', () => {
+	const updates = require('../updates');
+	assert.equal(updates.isNewer('0.9.25', '0.9.24'), true);
+	assert.equal(updates.isNewer('0.9.24', '0.9.24'), false);
+	assert.equal(updates.isNewer('0.9.9', '0.9.24'), false);
+	assert.equal(updates.isNewer('0.10.0', '0.9.24'), true);
+	assert.equal(updates.isNewer('v1.0.0', '0.9.25'), true);
+	assert.equal(updates.isNewer('', '0.9.25'), false);
+});
+
+test('кнопка обновления скачивает и ставит новый релиз', async () => {
+	const state = loadExtension(undefined, {
+		version: '0.9.24',
+		updates: {
+			latestRelease: async () => ({
+				version: '0.9.25',
+				name: 'opencode-sidebar-0.9.25.vsix',
+				url: 'https://example.test/opencode-sidebar-0.9.25.vsix'
+			}),
+			isNewer: () => true,
+			downloadVsix: async () => '/tmp/opencode-sidebar-0.9.25.vsix',
+			installWithCli: async () => { throw new Error('CLI не должен использоваться'); }
+		}
+	});
+	await state.provider.onMessage({ type: 'checkUpdates' });
+	assert.deepEqual(
+		state.messages.filter((message) => message.type === 'updateStatus').map((message) => message.state),
+		['checking', 'downloading', 'installing', 'done']
+	);
+	assert.ok(state.commands.includes('workbench.extensions.installExtension'));
+});
+
+test('при актуальной версии установка не запускается', async () => {
+	const state = loadExtension(undefined, {
+		version: '0.9.25',
+		updates: {
+			latestRelease: async () => ({ version: '0.9.25', name: 'opencode-sidebar-0.9.25.vsix' }),
+			isNewer: () => false
+		}
+	});
+	await state.provider.onMessage({ type: 'checkUpdates' });
+	assert.deepEqual(
+		state.messages.filter((message) => message.type === 'updateStatus').map((message) => message.state),
+		['checking', 'current']
+	);
+	assert.equal(state.commands.length, 0);
+});
+
+function loadRecommended(manifest, prepare) {	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sidebar-rec-'));
 	const extension = path.join(root, 'extension');
 	fs.mkdirSync(path.join(extension, 'skills'), { recursive: true });
 	fs.writeFileSync(path.join(extension, 'skills', 'manifest.json'), JSON.stringify({ skills: manifest }));

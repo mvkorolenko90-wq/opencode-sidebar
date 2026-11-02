@@ -7,6 +7,7 @@ const path = require('path');
 const { execFile, spawn } = require('child_process');
 const { startOpencodeWebUi, apiGet, apiPost, reloadOpencode } = require('./webui');
 const telegram = require('./telegram');
+const updates = require('./updates');
 
 const VIEW_ID = 'opencodeSidebar.main';const TERMINAL_NAME = 'opencode';
 const PORT_STATE_KEY = 'opencodeSidebar.ports';
@@ -309,6 +310,17 @@ async function telegramAction(action) {
   return telegram.action(telegramHome(), action);
 }
 
+async function installVsix(file) {
+  const uri = vscode.Uri.file(file);
+  try {
+    await vscode.commands.executeCommand('workbench.extensions.installExtension', uri);
+    return;
+  } catch {
+    // Fall back to the CLI when the running build does not accept a VSIX URI.
+  }
+  await updates.installWithCli(file);
+}
+
 class OpencodeViewProvider {
   constructor(context) {
     this.context = context;
@@ -325,6 +337,8 @@ class OpencodeViewProvider {
     this.pendingReload = false;
     this.fullPanel = null;
     this.fullRestoreSidebar = false;
+    this.updating = false;
+    this.installedVersion = '';
   }
 
   resolveWebviewView(webviewView) {
@@ -390,6 +404,11 @@ class OpencodeViewProvider {
 
       if (message.type === 'capabilities') {
         this.post({ type: 'capabilities', graphify: skillInstalled('graphify') });
+        return;
+      }
+
+      if (message.type === 'checkUpdates') {
+        await this.checkUpdates();
         return;
       }
 
@@ -802,6 +821,43 @@ class OpencodeViewProvider {
       return;
     }
     this.view.webview.postMessage(message);
+  }
+
+  async checkUpdates() {
+    if (this.updating) {
+      return;
+    }
+    this.updating = true;
+    const pkg = this.context.extension && this.context.extension.packageJSON;
+    const current = this.installedVersion || (pkg ? String(pkg.version || '') : '');
+    try {
+      this.post({ type: 'updateStatus', state: 'checking', version: current });
+      const release = await updates.latestRelease();
+      if (!updates.isNewer(release.version, current)) {
+        this.post({ type: 'updateStatus', state: 'current', version: current, latest: release.version });
+        return;
+      }
+      this.post({ type: 'updateStatus', state: 'downloading', version: release.version });
+      const file = await updates.downloadVsix(release);
+      this.post({ type: 'updateStatus', state: 'installing', version: release.version });
+      await installVsix(file);
+      this.installedVersion = release.version;
+      this.post({ type: 'updateStatus', state: 'done', version: release.version });
+      const choice = await vscode.window.showInformationMessage(
+        'opencode Sidebar обновлён до ' + release.version + '. Перезагрузить окно?',
+        'Перезагрузить',
+        'Позже'
+      );
+      if (choice === 'Перезагрузить') {
+        await vscode.commands.executeCommand('workbench.action.reloadWindow');
+      }
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      this.post({ type: 'updateStatus', state: 'error', message: text });
+      vscode.window.showErrorMessage('Не удалось обновить opencode Sidebar: ' + text);
+    } finally {
+      this.updating = false;
+    }
   }
 
   async openEmbedded(options = {}) {
@@ -1228,13 +1284,18 @@ function renderHtml(webview, extensionUri) {
   .agent-select { flex: none; max-width: 150px; height: 20px; padding: 0 2px; border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border)); border-radius: 4px; background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); font-family: inherit; font-size: 11px; }
   .agent-select:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
   .model-select { max-width: 150px; }
-  .agentbar { display: flex; align-items: center; gap: 6px; flex: none; height: 28px; padding: 0 8px; border-top: 1px solid var(--vscode-panel-border); background: var(--vscode-sideBar-background); }
-	.agentbar { overflow-x: auto; }
+  .agentbar { display: flex; align-items: center; gap: 6px; flex: none; height: 28px; padding: 0 8px; border-top: 1px solid var(--vscode-panel-border); background: var(--vscode-sideBar-background); position: relative; z-index: 12; }
+	.agentbar { overflow: hidden; }
+	.agentbar-group { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
 	.agentbar-btn { flex-shrink: 0; }
   .agentbar-label { font-size: 11px; color: var(--vscode-descriptionForeground); }
   .agentbar-btn { height: 20px; padding: 0 8px; border: 1px solid transparent; border-radius: 4px; background: var(--vscode-button-secondaryBackground, var(--vscode-button-background)); color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground)); font-family: inherit; font-size: 11px; line-height: 1; cursor: pointer; }
   .agentbar-btn:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground)); }
   .agentbar-btn:disabled { opacity: .5; cursor: default; }
+  .update-btn { margin-left: auto; padding: 0 6px; font-size: 13px; }
+  .update-btn.ok { color: var(--vscode-charts-green); }
+  .update-btn.warn { color: var(--vscode-charts-yellow); }
+  .update-btn.fail { color: var(--vscode-errorForeground); }
   .panes { position: relative; flex: 1; min-height: 0; }
   .pane { position: absolute; inset: 0; display: none; }
   .pane.active { display: flex; }
@@ -1263,12 +1324,15 @@ function renderHtml(webview, extensionUri) {
     <button id="rec-open" class="rec-open" title="Рекомендуемое">★</button>
   </div>
   <div id="panes" class="panes"></div>
-  <div id="agent-bar" class="agentbar" hidden>
-    <span class="agentbar-label">Агент</span>
-    <select id="agent-select" class="agent-select" title="Агент сессии"></select>
-    <select id="model-select" class="agent-select model-select" title="Модель по умолчанию"></select>
-    <button id="graphify-btn" class="agentbar-btn" title="Построить или обновить граф знаний по проекту" hidden>Graphify</button>
-		<button id="compact-btn" class="agentbar-btn" title="Сжать контекст текущей сессии. Часть деталей может потеряться.">Сжать контекст</button>
+  <div id="agent-bar" class="agentbar">
+    <div id="agent-controls" class="agentbar-group" hidden>
+      <span class="agentbar-label">Агент</span>
+      <select id="agent-select" class="agent-select" title="Агент сессии"></select>
+      <select id="model-select" class="agent-select model-select" title="Модель по умолчанию"></select>
+      <button id="graphify-btn" class="agentbar-btn" title="Построить или обновить граф знаний по проекту" hidden>Graphify</button>
+		  <button id="compact-btn" class="agentbar-btn" title="Сжать контекст текущей сессии. Часть деталей может потеряться.">Сжать контекст</button>
+    </div>
+    <button id="update-btn" class="agentbar-btn update-btn" title="Проверить обновления расширения">⬆</button>
   </div>
   <div id="rec-panel" class="recommended" hidden>
     <div class="rec-head">
