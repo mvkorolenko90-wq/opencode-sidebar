@@ -26,6 +26,7 @@
     const modelSelect = document.getElementById('model-select');
     const recOpen = document.getElementById('rec-open');
     const fullOpen = document.getElementById('full-open');
+    const fullBack = document.getElementById('full-back');
     const recPanel = document.getElementById('rec-panel');
     const recClose = document.getElementById('rec-close');
     const recList = document.getElementById('rec-list');
@@ -707,6 +708,11 @@
       const tab = activeTab();
       vscode.postMessage({ type: 'openFull', url: tab && tab.iframe ? tab.iframe.src : '' });
     });
+    if (fullBack) {
+      fullBack.addEventListener('click', function () {
+        vscode.postMessage({ type: 'closeFull' });
+      });
+    }
 
     document.addEventListener('mousedown', function (event) {
       if (recPanel.hidden) {
@@ -1068,6 +1074,14 @@
         return;
       }
 
+      if (message.type === 'navigate' && document.body.dataset.full && typeof message.url === 'string') {
+        const tab = activeTab();
+        if (tab && normalizeBase(message.url) === baseUrl) {
+          tab.iframe.src = withTimestamp(message.url);
+        }
+        return;
+      }
+
       if (message.type === 'opencode-sidebar-title') {
         const tab = tabFromSource(event.source);
         if (tab) {
@@ -1229,7 +1243,8 @@
           baseUrl = nextBase;
           addBtn.disabled = false;
           startLoading('Загружаю opencode…');
-          createTab(message.url, 'Главная');
+          const initialUrl = document.body.dataset.full && document.body.dataset.initialUrl;
+          createTab(initialUrl && normalizeBase(initialUrl) === nextBase ? initialUrl : message.url, 'Главная');
         } else {
           if (message.reloaded) {
             reloadTabs(nextBase, message.url);

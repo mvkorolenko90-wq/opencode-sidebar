@@ -890,10 +890,12 @@ class OpencodeViewProvider {
   }
 
   post(message) {
-    if (!this.view) {
-      return;
+    if (this.view) {
+      this.view.webview.postMessage(message);
     }
-    this.view.webview.postMessage(message);
+    if (this.fullPanel) {
+      this.fullPanel.webview.postMessage(message);
+    }
   }
 
   async openExternal(url) {
@@ -1053,15 +1055,13 @@ class OpencodeViewProvider {
       }
     );
     panel.iconPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'opencode.svg');
-    panel.webview.html = renderFullHtml(panel.webview, target);
+    panel.webview.html = renderFullHtml(panel.webview, this.extensionUri, target);
     panel.webview.onDidReceiveMessage((message) => {
       if (message && message.type === 'closeFull') {
         panel.dispose();
         return;
       }
-      if (message && message.type === 'openExternal') {
-        this.openExternal(typeof message.url === 'string' ? message.url : '');
-      }
+      this.onMessage(message);
     });
     panel.onDidDispose(() => {
       if (this.fullPanel === panel) {
@@ -1256,62 +1256,17 @@ function detectCli() {
   });
 }
 
-function renderFullHtml(webview, url) {
+function renderFullHtml(webview, extensionUri, url) {
+  return renderHtml(webview, extensionUri, { full: true, initialUrl: url });
+}
+
+function renderHtml(webview, extensionUri, options = {}) {
   const nonce = getNonce();
-  const safe = String(url)
+  const panelScript = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'panel.js'));
+  const initialUrl = String(options.initialUrl || '')
     .replace(/&/g, '&amp;')
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;');
-  return `<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; frame-src http: https:; script-src 'nonce-${nonce}';">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: var(--vscode-editor-background); }
-  iframe { display: block; width: 100%; height: 100%; border: 0; }
-  .full-back {
-    position: fixed; top: 8px; right: 12px; z-index: 10;
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 5px 10px;
-    border: 1px solid var(--vscode-button-border, rgba(255, 255, 255, .18));
-    border-radius: 5px;
-    background: var(--vscode-button-secondaryBackground, rgba(30, 30, 30, .85));
-    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground, #fff));
-    font-family: var(--vscode-font-family, sans-serif);
-    font-size: 12px; line-height: 16px; cursor: pointer; opacity: .78;
-  }
-  .full-back:hover { opacity: 1; background: var(--vscode-button-secondaryHoverBackground, rgba(60, 60, 60, .95)); }
-  .full-back:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
-</style>
-</head>
-<body>
-<iframe id="frame" src="${safe}" title="opencode" allow="clipboard-read; clipboard-write"></iframe>
-<button id="full-back" class="full-back" type="button" title="Закрыть полный экран и вернуться в панель">⤡ В панель</button>
-<script nonce="${nonce}">
-  var vscode = acquireVsCodeApi();
-  document.getElementById('full-back').addEventListener('click', function () {
-    vscode.postMessage({ type: 'closeFull' });
-  });
-  window.addEventListener('message', function (event) {
-    var data = event.data;
-    if (!data) return;
-    if (data.type === 'navigate' && typeof data.url === 'string') {
-      document.getElementById('frame').src = data.url;
-    }
-    if (data.type === 'opencode-sidebar-open-external' && typeof data.url === 'string') {
-      vscode.postMessage({ type: 'openExternal', url: data.url });
-    }
-  });
-</script>
-</body>
-</html>`;
-}
-
-function renderHtml(webview, extensionUri) {
-  const nonce = getNonce();
-  const panelScript = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'panel.js'));
   return `<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -1404,21 +1359,25 @@ function renderHtml(webview, extensionUri) {
   .overlay.error { flex-wrap: wrap; gap: 8px; }
   .retry:hover { background: var(--vscode-button-hoverBackground); }
   .retry:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: 2px; }
+  .full-back { flex: none; height: 26px; margin: 0 6px 0 2px; padding: 0 8px; border: 1px solid var(--vscode-button-border, var(--vscode-panel-border)); border-radius: 4px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); font-family: inherit; font-size: 11px; cursor: pointer; }
+  .full-back:hover { background: var(--vscode-button-secondaryHoverBackground); }
+  .full-back:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
   .session-back { flex: none; width: 24px; height: 24px; margin: 0 0 0 4px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--vscode-foreground); font-family: inherit; font-size: 15px; line-height: 1; cursor: pointer; }
   .session-back:hover { background: var(--vscode-toolbar-hoverBackground); }
   .session-back:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
 </style>
 </head>
-<body>
+<body${options.full ? ` data-full="true" data-initial-url="${initialUrl}"` : ''}>
 <div class="app">
   <div id="tabbar" class="tabbar">
     <button id="session-back" class="session-back" title="К списку сессий" hidden>←</button>
     <div id="tabs" class="tabs">
-      <button id="tab-add" class="tab-add" title="Новая вкладка (Ctrl+Shift+T)" disabled>+</button>
+      <button id="tab-add" class="tab-add" title="Новая вкладка (Ctrl+Shift+T)" disabled${options.full ? ' hidden' : ''}>+</button>
     </div>
     <span id="session-cost" class="session-cost" hidden></span>
-    <button id="full-open" class="rec-open" title="Открыть на весь экран">⤢</button>
+    <button id="full-open" class="rec-open" title="Открыть на весь экран"${options.full ? ' hidden' : ''}>⤢</button>
     <button id="rec-open" class="rec-open" title="Рекомендуемое">★</button>
+    ${options.full ? '<button id="full-back" class="full-back" type="button" title="Закрыть полный экран и вернуться в панель">⤡ В панель</button>' : ''}
   </div>
   <div id="panes" class="panes"></div>
   <div id="agent-bar" class="agentbar">
@@ -1459,4 +1418,4 @@ function getNonce() {
   return nonce;
 }
 
-module.exports = { activate, deactivate, readRecommended, addMcpServer, installSkill };
+module.exports = { activate, deactivate, readRecommended, addMcpServer, installSkill, renderFullHtml };

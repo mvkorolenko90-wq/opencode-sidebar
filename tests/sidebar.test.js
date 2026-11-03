@@ -63,7 +63,7 @@ function loadExtension(pluginContent, options = {}) {
 	});
 	provider.cliBinary = '';
 	provider.view = { webview: { postMessage(message) { messages.push(message); } } };
-	return { provider, responses, requests, messages, errors, renamed, commands, opened };
+	return { provider, responses, requests, messages, errors, renamed, commands, opened, renderFullHtml: sandbox.module.exports.renderFullHtml };
 }
 
 test('старый плагин отключается с сохранением резервной копии', () => {
@@ -125,6 +125,24 @@ test('панель содержит «Сжать контекст» и не со
 	assert.match(extension, /full-back/);
 });
 
+test('полный экран содержит те же элементы управления без перекрывающей кнопки', async () => {
+	const state = loadExtension();
+	const webview = { cspSource: 'test:', asWebviewUri(value) { return value; } };
+	const html = state.renderFullHtml(webview, { fsPath: 'extension' }, 'http://localhost:1234/server/a/session/ses_test?x=1&y=2');
+	assert.match(html, /data-full="true" data-initial-url="http:\/\/localhost:1234\/server\/a\/session\/ses_test\?x=1&amp;y=2"/);
+	for (const id of ['rec-open', 'rec-panel', 'agent-select', 'model-select', 'graphify-btn', 'update-btn', 'full-back']) {
+		assert.match(html, new RegExp('id="' + id + '"'));
+	}
+	assert.match(html, /<script[^>]*src="[^"]*panel\.js"/);
+	assert.match(html, /<div id="tabbar"[\s\S]*id="full-back"[\s\S]*<div id="panes"/);
+	assert.doesNotMatch(html, /\.full-back\s*\{[^}]*position:\s*fixed/);
+	const fullMessages = [];
+	state.provider.fullPanel = { webview: { postMessage(message) { fullMessages.push(message); } } };
+	await state.provider.onMessage({ type: 'capabilities' });
+	assert.equal(fullMessages[0].type, 'capabilities');
+	assert.equal(state.messages[0].type, 'capabilities');
+});
+
 test('ссылки из web-UI открываются в системном браузере', async () => {
 	const state = loadExtension();
 	await state.provider.onMessage({ type: 'openExternal', url: 'https://auth.openai.com/authorize?client_id=1' });
@@ -138,7 +156,7 @@ test('ссылки из web-UI открываются в системном бр
 	assert.match(panel, /type: 'openExternal'/);
 	const extension = fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8');
 	assert.match(extension, /env\.openExternal/);
-	assert.match(extension, /opencode-sidebar-open-external/);
+	assert.match(extension, /this\.onMessage\(message\)/);
 });
 
 test('сравнение версий считает новые релизы новее', () => {
