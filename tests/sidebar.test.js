@@ -14,6 +14,7 @@ function loadExtension(pluginContent, options = {}) {
 	const messages = [];
 	const requests = [];
 	const commands = [];
+	const registeredCommands = {};
 	const responses = { active: { data: {} }, compact: { data: { type: 'compaction' } } };
 	const opened = [];
 	const vscode = {
@@ -24,7 +25,7 @@ function loadExtension(pluginContent, options = {}) {
 			async showInformationMessage() { return 'Позже'; }
 		},
 		commands: {
-			registerCommand() {},
+			registerCommand(name, handler) { registeredCommands[name] = handler; },
 			async executeCommand(command) { commands.push(command); }
 		},
 		Uri: {
@@ -63,7 +64,7 @@ function loadExtension(pluginContent, options = {}) {
 	});
 	provider.cliBinary = '';
 	provider.view = { webview: { postMessage(message) { messages.push(message); } } };
-	return { provider, responses, requests, messages, errors, renamed, commands, opened, renderFullHtml: sandbox.module.exports.renderFullHtml };
+	return { provider, responses, requests, messages, errors, renamed, commands, registeredCommands, opened, renderFullHtml: sandbox.module.exports.renderFullHtml };
 }
 
 test('старый плагин отключается с сохранением резервной копии', () => {
@@ -134,6 +135,7 @@ test('полный экран содержит те же элементы упр
 		assert.match(html, new RegExp('id="' + id + '"'));
 	}
 	assert.match(html, /<script[^>]*src="[^"]*panel\.js"/);
+	assert.match(html, /id="tab-add"[^>]*disabled>\+<\/button>/);
 	assert.match(html, /<div id="tabbar"[\s\S]*id="full-back"[\s\S]*<div id="panes"/);
 	assert.doesNotMatch(html, /\.full-back\s*\{[^}]*position:\s*fixed/);
 	const fullMessages = [];
@@ -141,6 +143,18 @@ test('полный экран содержит те же элементы упр
 	await state.provider.onMessage({ type: 'capabilities' });
 	assert.equal(fullMessages[0].type, 'capabilities');
 	assert.equal(state.messages[0].type, 'capabilities');
+});
+
+test('команда новой вкладки отправляется активному полному экрану, а не скрытой боковой панели', () => {
+	const state = loadExtension();
+	const fullMessages = [];
+	state.provider.fullPanel = { active: true, webview: { postMessage(message) { fullMessages.push(message); } } };
+	state.registeredCommands['opencodeSidebar.newTab']();
+	assert.deepEqual(fullMessages.map((message) => message.type), ['newTab']);
+	assert.equal(state.messages.length, 0);
+	state.provider.fullPanel.active = false;
+	state.registeredCommands['opencodeSidebar.newTab']();
+	assert.equal(state.messages[0].type, 'newTab');
 });
 
 test('ссылки из web-UI открываются в системном браузере', async () => {

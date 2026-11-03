@@ -401,17 +401,17 @@ class OpencodeViewProvider {
     };
     webviewView.webview.onDidReceiveMessage((message) => this.onMessage(message));
     webviewView.webview.html = renderHtml(webviewView.webview, this.extensionUri);
-    vscode.commands.executeCommand('setContext', 'opencodeSidebarOpen', Boolean(webviewView.visible));
+    vscode.commands.executeCommand('setContext', 'opencodeSidebarOpen', Boolean(webviewView.visible || (this.fullPanel && this.fullPanel.active)));
     webviewView.onDidChangeVisibility(() => {
       if (webviewView.visible) {
         this.fullRestoreSidebar = false;
       }
-      vscode.commands.executeCommand('setContext', 'opencodeSidebarOpen', Boolean(webviewView.visible));
+      vscode.commands.executeCommand('setContext', 'opencodeSidebarOpen', Boolean(webviewView.visible || (this.fullPanel && this.fullPanel.active)));
     });
     webviewView.onDidDispose(() => {
       if (this.view === webviewView) {
         this.view = null;
-        vscode.commands.executeCommand('setContext', 'opencodeSidebarOpen', false);
+        vscode.commands.executeCommand('setContext', 'opencodeSidebarOpen', Boolean(this.fullPanel && this.fullPanel.active));
         this.dispose();
       }
     });
@@ -1042,6 +1042,7 @@ class OpencodeViewProvider {
       this.fullPanel.reveal(vscode.ViewColumn.Active);
       this.fullPanel.webview.postMessage({ type: 'navigate', url: target });
       await this.collapseSidebarForFull();
+      vscode.commands.executeCommand('setContext', 'opencodeSidebarOpen', Boolean(this.fullPanel.active));
       return;
     }
     const panel = vscode.window.createWebviewPanel(
@@ -1067,6 +1068,7 @@ class OpencodeViewProvider {
       if (this.fullPanel === panel) {
         this.fullPanel = null;
       }
+      vscode.commands.executeCommand('setContext', 'opencodeSidebarOpen', Boolean(this.view && this.view.visible));
       if (this.fullRestoreSidebar) {
         this.revealSidebar();
         return;
@@ -1076,7 +1078,11 @@ class OpencodeViewProvider {
       }
     });
     this.fullPanel = panel;
+    panel.onDidChangeViewState(() => {
+      vscode.commands.executeCommand('setContext', 'opencodeSidebarOpen', Boolean(panel.active || (this.view && this.view.visible)));
+    });
     await this.collapseSidebarForFull();
+    vscode.commands.executeCommand('setContext', 'opencodeSidebarOpen', Boolean(panel.active));
   }
 
   async collapseSidebarForFull() {
@@ -1106,6 +1112,13 @@ class OpencodeViewProvider {
       await vscode.commands.executeCommand('opencodeSidebar.main.focus');
     } catch {
       // Focus command may be unavailable; the sidebar is already open.
+    }
+  }
+
+  newTab() {
+    const target = this.fullPanel && this.fullPanel.active ? this.fullPanel.webview : this.view && this.view.webview;
+    if (target) {
+      target.postMessage({ type: 'newTab' });
     }
   }
 
@@ -1156,7 +1169,7 @@ function activate(context) {
     }),
     vscode.commands.registerCommand('opencodeSidebar.reloadUi', () => provider.reloadEmbedded()),
     vscode.commands.registerCommand('opencodeSidebar.openFull', () => provider.openFullView()),
-    vscode.commands.registerCommand('opencodeSidebar.newTab', () => provider.post({ type: 'newTab' })),
+    vscode.commands.registerCommand('opencodeSidebar.newTab', () => provider.newTab()),
     vscode.commands.registerCommand('opencodeSidebar.openTerminal', () => openOpencode(false)),
     vscode.commands.registerCommand('opencodeSidebar.telegramStatus', () => telegramCommand('status')),
     vscode.commands.registerCommand('opencodeSidebar.telegramStart', () => telegramCommand('start')),
@@ -1372,7 +1385,7 @@ function renderHtml(webview, extensionUri, options = {}) {
   <div id="tabbar" class="tabbar">
     <button id="session-back" class="session-back" title="К списку сессий" hidden>←</button>
     <div id="tabs" class="tabs">
-      <button id="tab-add" class="tab-add" title="Новая вкладка (Ctrl+Shift+T)" disabled${options.full ? ' hidden' : ''}>+</button>
+      <button id="tab-add" class="tab-add" title="Новая вкладка (Ctrl+Shift+T)" disabled>+</button>
     </div>
     <span id="session-cost" class="session-cost" hidden></span>
     <button id="full-open" class="rec-open" title="Открыть на весь экран"${options.full ? ' hidden' : ''}>⤢</button>
