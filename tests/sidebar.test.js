@@ -220,6 +220,29 @@ test('без setup недостающие зависимости не чинят
 	assert.equal(item.fixable, false);
 });
 
+test('план установки включает внешние зависимости по порядку', () => {
+	const state = loadRecommended([{
+		id: 'graphify',
+		requires: { binary: 'graphify-not-installed-xyz' },
+		setup: {
+			prerequisites: [{ title: 'uv', binary: 'uv-not-installed-xyz', command: 'true' }],
+			binary: { command: 'true' }
+		}
+	}], null);
+	const item = state.readRecommended({ fsPath: state.extension })[0];
+	assert.equal(item.installed, false);
+	assert.equal(item.fixable, true);
+	assert.equal(item.plan.join(' | '), 'uv | graphify-not-installed-xyz');
+	assert.equal(item.missing.join(' | '), 'не найден graphify-not-installed-xyz');
+});
+
+test('панель предлагает установить зависимости перед пакетом', () => {
+	const panel = fs.readFileSync(path.join(__dirname, '..', 'media', 'panel.js'), 'utf8');
+	assert.match(panel, /installRecommended/);
+	assert.match(panel, /Установить всё/);
+	assert.match(panel, /rec-dep/);
+});
+
 test('скилл с драйвером и MCP считается установленным', () => {
 	const state = loadRecommended(
 		[{ id: 'cua-driver', requires: { binary: 'node', mcp: 'cua-driver' } }],

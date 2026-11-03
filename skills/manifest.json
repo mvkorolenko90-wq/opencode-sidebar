@@ -19,8 +19,14 @@
     {
       "id": "find-skills",
       "title": "Find Skills — поиск и установка скиллов",
-      "description": "Помогает найти готовый скилл под задачу и установить его. Агент ищет по каталогу скиллов и предлагает подходящий вместо написания с нуля.",
-      "requires": { "binary": "npx" }
+      "description": "Помогает найти готовый скилл под задачу и установить его. Агент ищет по каталогу скиллов и предлагает подходящий вместо написания с нуля. Нужен npx из Node.js.",
+      "requires": { "binary": "npx" },
+      "setup": {
+        "binary": {
+          "command": "set -e; A=x64; case \"$(uname -m)\" in aarch64|arm64) A=arm64;; esac; V=$(curl -fsSL https://nodejs.org/dist/index.json | grep -o '\"version\":\"v[0-9][^\"]*\"' | head -1 | cut -d'\"' -f4); D=\"$HOME/.local/node\"; mkdir -p \"$D\" \"$HOME/.local/bin\"; curl -fsSL \"https://nodejs.org/dist/$V/node-$V-linux-$A.tar.xz\" | tar -xJ -C \"$D\" --strip-components=1; ln -sf \"$D/bin/node\" \"$HOME/.local/bin/node\"; ln -sf \"$D/bin/npm\" \"$HOME/.local/bin/npm\"; ln -sf \"$D/bin/npx\" \"$HOME/.local/bin/npx\"",
+          "windows": "$arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }; $dir = Join-Path $env:LOCALAPPDATA 'node'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $v = (Invoke-RestMethod https://nodejs.org/dist/index.json)[0].version; $zip = Join-Path $env:TEMP \"node-$v-win-$arch.zip\"; Invoke-WebRequest \"https://nodejs.org/dist/$v/node-$v-win-$arch.zip\" -OutFile $zip; Expand-Archive -Path $zip -DestinationPath $dir -Force; $src = Join-Path $dir \"node-$v-win-$arch\"; Copy-Item \"$src\\*\" $dir -Recurse -Force"
+        }
+      }
     },
     {
       "id": "graphify",
@@ -28,6 +34,14 @@
       "description": "Превращает папку с файлами в граф знаний: связи между файлами, сообщества, отчёт и интерактивная HTML-схема. Помогает отвечать на вопросы об архитектуре проекта, не читая весь код.",
       "requires": { "binary": "graphify" },
       "setup": {
+        "prerequisites": [
+          {
+            "title": "uv",
+            "binary": "uv",
+            "command": "curl -LsSf https://astral.sh/uv/install.sh | sh",
+            "windows": "irm https://astral.sh/uv/install.ps1 | iex"
+          }
+        ],
         "binary": {
           "command": "uv tool install --upgrade graphifyy -q",
           "windows": "uv tool install --upgrade graphifyy -q"

@@ -36,7 +36,14 @@ function pathEntries() {
   const home = os.homedir();
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
-    entries.push(path.join(appData, 'npm'), path.join(home, '.local', 'bin'));
+    const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    entries.push(
+      path.join(appData, 'npm'),
+      path.join(localAppData, 'node'),
+      path.join(localAppData, 'Programs', 'nodejs'),
+      path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs'),
+      path.join(home, '.local', 'bin')
+    );
   } else {
     entries.push(path.join(home, '.local', 'bin'), '/usr/local/bin', '/opt/homebrew/bin');
   }
@@ -98,6 +105,45 @@ function unmetRequirements(requires) {
     missing.push('нет MCP ' + requires.mcp + ' в opencode.json');
   }
   return missing;
+}
+
+function setupCommand(step) {
+  if (!step || typeof step !== 'object') return '';
+  const command = process.platform === 'win32' ? step.windows : step.command;
+  return typeof command === 'string' ? command.trim() : '';
+}
+
+// Порядок установки: сначала внешние программы (uv, Node.js), затем сам
+// бинарник зависимости, затем MCP-запись. На одном шаге список не строится —
+// после установки предыдущего бинарника следующий может стать доступен.
+function requirementSteps(entry) {
+  const setup = entry.setup && typeof entry.setup === 'object' ? entry.setup : {};
+  const requires = entry.requires && typeof entry.requires === 'object' ? entry.requires : {};
+  const steps = [];
+  const prerequisites = Array.isArray(setup.prerequisites) ? setup.prerequisites : [];
+  for (const item of prerequisites) {
+    if (!item || typeof item !== 'object') continue;
+    const binary = String(item.binary || '');
+    if (!binary || binaryPath(binary)) continue;
+    steps.push({
+      kind: 'prerequisite',
+      title: String(item.title || binary),
+      binary: binary,
+      command: setupCommand(item)
+    });
+  }
+  if (requires.binary && !binaryPath(String(requires.binary))) {
+    steps.push({
+      kind: 'binary',
+      title: String(requires.binary),
+      binary: String(requires.binary),
+      command: setupCommand(setup.binary)
+    });
+  }
+  if (requires.mcp && !hasMcpServer(String(requires.mcp))) {
+    steps.push({ kind: 'mcp', title: 'MCP ' + requires.mcp, binary: '', command: '' });
+  }
+  return steps;
 }
 
 function runSetupCommand(command) {
@@ -172,6 +218,8 @@ function readRecommended(extensionUri) {
       ? Boolean(id && readAgentEntry(id))
       : Boolean(id) && fs.existsSync(path.join(globalSkillsDir(), id, 'SKILL.md'));
     const missing = unmetRequirements(item.requires);
+    const steps = requirementSteps(item);
+    const setup = item.setup && typeof item.setup === 'object' ? item.setup : {};
     return {
       id: id,
       type: type,
@@ -179,8 +227,11 @@ function readRecommended(extensionUri) {
       description: String(item.description || ''),
       installed: installed,
       missing: missing,
+      plan: steps.map((step) => step.title),
       ready: installed && missing.length === 0,
-      fixable: missing.length > 0 && Boolean(item.setup)
+      fixable: steps.length > 0 && steps.every((step) => (
+        step.kind === 'mcp' ? Boolean(setup.mcp) : Boolean(step.command)
+      ))
     };
   });
 }
@@ -526,13 +577,20 @@ class OpencodeViewProvider {
         return;
       }
 
-      if (message.type === 'fixRecommended' && typeof message.id === 'string') {
+      if (message.type === 'installRecommended' && typeof message.id === 'string') {
         try {
-          const text = await this.fixRecommended(message.id);
-          this.post({ type: 'recommendedFixed', id: message.id, ok: true, text });
+          const result = await this.installRecommended(message.id);
+          this.post({
+            type: 'recommendedInstalled',
+            id: message.id,
+            ok: true,
+            done: result.done,
+            missing: result.missing
+          });
+          await this.sendRecommended();
         } catch (error) {
           const text = error instanceof Error ? error.message : String(error);
-          this.post({ type: 'recommendedFixed', id: message.id, ok: false, message: text });
+          this.post({ type: 'recommendedInstalled', id: message.id, ok: false, message: text });
         }
         return;
       }
@@ -772,33 +830,33 @@ class OpencodeViewProvider {
     this.post({ type: 'recommended', items: readRecommended(this.extensionUri), telegram: telegramState });
   }
 
-  async fixRecommended(id) {
+  async installRecommended(id) {
     const entry = manifestEntry(this.extensionUri, id);
     if (!entry) {
       throw new Error('Пункт не найден: ' + id);
     }
-    const setup = entry.setup && typeof entry.setup === 'object' ? entry.setup : null;
-    if (!setup) {
-      throw new Error('Для этого пункта нет автоматического исправления.');
-    }
+    const setup = entry.setup && typeof entry.setup === 'object' ? entry.setup : {};
     const requires = entry.requires && typeof entry.requires === 'object' ? entry.requires : {};
     const done = [];
-    if (requires.binary && !binaryPath(String(requires.binary))) {
-      const command = process.platform === 'win32'
-        ? setup.binary && setup.binary.windows
-        : setup.binary && setup.binary.command;
-      if (!command) {
-        throw new Error('Не задана команда установки драйвера.');
+
+    // 1. Внешние зависимости и сам бинарник — по порядку, с перепроверкой PATH.
+    for (const step of requirementSteps(entry)) {
+      if (step.kind === 'mcp') continue;
+      if (!step.command) {
+        throw new Error('Для «' + step.title + '» не задана команда установки.');
       }
-      await runSetupCommand(String(command));
-      if (!binaryPath(String(requires.binary))) {
-        throw new Error('Драйвер установлен, но не найден в PATH и ~/.local/bin. Перезагрузите окно VS Code.');
+      this.post({ type: 'recommendedProgress', id: id, text: 'Устанавливаю ' + step.title + '…' });
+      await runSetupCommand(step.command);
+      if (!binaryPath(step.binary)) {
+        throw new Error(step.title + ' установлен, но не найден в PATH. Перезагрузите окно VS Code и нажмите «Обновить».');
       }
-      done.push('драйвер');
+      done.push(step.title);
     }
+
+    // 2. MCP-запись в конфиг opencode.
     if (requires.mcp && !hasMcpServer(String(requires.mcp))) {
       if (!setup.mcp || typeof setup.mcp !== 'object') {
-        throw new Error('Не задано описание MCP-сервера.');
+        throw new Error('Не задано описание MCP-сервера ' + requires.mcp + '.');
       }
       const definition = JSON.parse(JSON.stringify(setup.mcp));
       if (requires.binary && Array.isArray(definition.command)) {
@@ -808,12 +866,22 @@ class OpencodeViewProvider {
         }
       }
       addMcpServer(String(requires.mcp), definition);
-      done.push('MCP');
       await this.applyConfigChange().catch(() => {
         this.pendingReload = true;
       });
+      done.push('MCP ' + requires.mcp);
     }
-    return done.length ? 'Установлено: ' + done.join(', ') + '.' : 'Всё уже на месте.';
+
+    // 3. Сам рекомендуемый пакет — скилл или агент.
+    this.post({ type: 'recommendedProgress', id: id, text: 'Устанавливаю пакет…' });
+    if (entry.type === 'agent') {
+      installAgent(this.extensionUri, id);
+    } else {
+      installSkill(this.extensionUri, id);
+    }
+    done.push(entry.type === 'agent' ? 'агент' : 'скилл');
+
+    return { done: done, missing: unmetRequirements(requires) };
   }
 
   post(message) {
@@ -1277,6 +1345,9 @@ function renderHtml(webview, extensionUri) {
   .rec-status.ok { color: var(--vscode-charts-green); }
   .rec-status.warn { color: var(--vscode-charts-yellow); }
   .rec-status.fail { color: var(--vscode-errorForeground); }
+  .rec-dep { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; padding: 6px; border: 1px dashed var(--vscode-panel-border); border-radius: 4px; }
+  .rec-dep[hidden] { display: none; }
+  .rec-dep-text { flex: 1 1 100%; font-size: 11px; color: var(--vscode-descriptionForeground); }
   .rec-wrap { flex-wrap: wrap; }
   .rec-telegram-status { margin-top: 6px; font-size: 11px; line-height: 1.4; color: var(--vscode-descriptionForeground); white-space: pre-wrap; overflow-wrap: anywhere; }
   .rec-telegram-status.ok { color: var(--vscode-charts-green); }

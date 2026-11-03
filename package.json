@@ -2,7 +2,7 @@
   "name": "opencode-sidebar",
   "displayName": "opencode Sidebar",
   "description": "Иконка opencode в Activity Bar и встроенный web-интерфейс opencode.",
-  "version": "0.9.25",
+  "version": "0.9.26",
   "publisher": "myai",
   "license": "MIT",
   "repository": {

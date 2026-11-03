@@ -616,53 +616,71 @@
         const action = document.createElement('button');
         action.type = 'button';
         action.className = 'rec-action';
-        action.textContent = item.installed ? 'Обновить' : 'Установить';
 
-        let fix = null;
-        if (item.installed && item.fixable) {
-          fix = document.createElement('button');
-          fix.type = 'button';
-          fix.className = 'rec-action';
-          fix.textContent = 'Устранить';
-          action.className = 'rec-action rec-secondary';
-          fix.addEventListener('click', function () {
-            fix.disabled = true;
-            action.disabled = true;
-            status.className = 'rec-status warn';
-            status.textContent = 'устраняю…';
-            vscode.postMessage({ type: 'fixRecommended', id: item.id });
-          });
-        }
+        const missing = Array.isArray(item.missing) ? item.missing : [];
+        const plan = Array.isArray(item.plan) && item.plan.length ? item.plan : missing;
+        const needsDeps = missing.length > 0;
+        action.textContent = item.installed
+          ? (needsDeps ? 'Обновить и настроить' : 'Обновить')
+          : (needsDeps ? 'Установить с зависимостями' : 'Установить');
 
         const status = document.createElement('span');
-        status.className = 'rec-status' + (item.ready ? ' ok' : (item.installed ? ' warn' : ''));
+        status.className = 'rec-status' + (item.ready ? ' ok' : (missing.length ? ' warn' : ''));
         status.textContent = item.ready
           ? 'установлен'
-          : (item.installed && item.missing && item.missing.length ? 'не готово · ' + item.missing.join(' · ') : '');
+          : (missing.length ? 'не хватает: ' + plan.join(' · ') : '');
 
-        action.addEventListener('click', function () {
+        const depBox = document.createElement('div');
+        depBox.className = 'rec-dep';
+        depBox.hidden = true;
+        const depText = document.createElement('div');
+        depText.className = 'rec-dep-text';
+        depText.textContent = 'Нужно установить: ' + plan.join(', ') + '. Установить зависимости и пакет?';
+        const depYes = document.createElement('button');
+        depYes.type = 'button';
+        depYes.className = 'rec-action';
+        depYes.textContent = 'Установить всё';
+        const depNo = document.createElement('button');
+        depNo.type = 'button';
+        depNo.className = 'rec-action rec-secondary';
+        depNo.textContent = 'Отмена';
+        depBox.appendChild(depText);
+        depBox.appendChild(depYes);
+        depBox.appendChild(depNo);
+
+        function startInstall() {
           action.disabled = true;
-          if (fix) {
-            fix.disabled = true;
-          }
+          depYes.disabled = true;
+          depNo.disabled = true;
           action.textContent = 'Установка…';
           status.className = 'rec-status';
-          status.textContent = '';
-          vscode.postMessage({ type: item.type === 'agent' ? 'installAgent' : 'installSkill', id: item.id });
+          status.textContent = needsDeps ? 'устанавливаю зависимости…' : '';
+          vscode.postMessage({ type: 'installRecommended', id: item.id });
+        }
+
+        action.addEventListener('click', function () {
+          if (needsDeps && depBox.hidden) {
+            depBox.hidden = false;
+            return;
+          }
+          startInstall();
         });
 
-        if (fix) {
-          foot.appendChild(fix);
-        }
+        depYes.addEventListener('click', startInstall);
+        depNo.addEventListener('click', function () {
+          depBox.hidden = true;
+        });
+
         foot.appendChild(action);
         foot.appendChild(status);
         body.appendChild(name);
         body.appendChild(desc);
         body.appendChild(foot);
+        body.appendChild(depBox);
         row.appendChild(num);
         row.appendChild(body);
         recList.appendChild(row);
-        recRows.push({ id: item.id, action: action, fix: fix, status: status });
+        recRows.push({ id: item.id, action: action, status: status, depBox: depBox, depYes: depYes, depNo: depNo });
       });
     }
 
@@ -1141,50 +1159,43 @@
         applyTelegramState(message.state || {}, message.text);
         return;
       }
-      if (message.type === 'skillInstalled' || message.type === 'agentInstalled') {
+      if (message.type === 'recommendedProgress') {
+        const row = recRows.find(function (entry) { return entry.id === message.id; });
+        if (!row) {
+          return;
+        }
+        row.status.className = 'rec-status';
+        row.status.textContent = message.text || '';
+        return;
+      }
+
+      if (message.type === 'recommendedInstalled') {
         const row = recRows.find(function (entry) { return entry.id === message.id; });
         if (!row) {
           return;
         }
         row.action.disabled = false;
-        if (row.fix) {
-          row.fix.disabled = false;
+        if (row.depYes) {
+          row.depYes.disabled = false;
+        }
+        if (row.depNo) {
+          row.depNo.disabled = false;
+        }
+        if (row.depBox) {
+          row.depBox.hidden = true;
         }
         if (message.ok) {
-          row.action.textContent = 'Обновить';
+          const done = Array.isArray(message.done) && message.done.length ? message.done.join(', ') : 'пакет';
           row.status.className = 'rec-status ok';
-          row.status.textContent = message.type === 'agentInstalled' ? 'установлен, нужен reload' : 'обновлено';
-          if (message.type === 'skillInstalled') {
-            vscode.postMessage({ type: 'recommended' });
+          row.status.textContent = 'установлено: ' + done;
+          if (Array.isArray(message.missing) && message.missing.length) {
+            row.status.className = 'rec-status warn';
+            row.status.textContent += ' · осталось: ' + message.missing.join(' · ');
           }
         } else {
           row.action.textContent = 'Повторить';
           row.status.className = 'rec-status fail';
           row.status.textContent = message.message || 'ошибка';
-        }
-        return;
-      }
-
-      if (message.type === 'recommendedFixed') {
-        const row = recRows.find(function (entry) { return entry.id === message.id; });
-        if (!row) {
-          return;
-        }
-        row.action.disabled = false;
-        if (row.fix) {
-          row.fix.disabled = false;
-        }
-        row.action.textContent = 'Обновить';
-        if (message.ok) {
-          if (row.fix) {
-            row.fix.remove();
-            row.fix = null;
-          }
-          row.status.className = 'rec-status ok';
-          row.status.textContent = (message.text || 'готово') + ' Нажмите «Обновить», чтобы проверить.';
-        } else {
-          row.status.className = 'rec-status fail';
-          row.status.textContent = message.message || 'не удалось устранить';
         }
         return;
       }
