@@ -15,6 +15,7 @@ function loadExtension(pluginContent, options = {}) {
 	const requests = [];
 	const commands = [];
 	const responses = { active: { data: {} }, compact: { data: { type: 'compaction' } } };
+	const opened = [];
 	const vscode = {
 		workspace: { workspaceFolders: [{ uri: { fsPath: 'workspace' } }] },
 		window: {
@@ -28,7 +29,11 @@ function loadExtension(pluginContent, options = {}) {
 		},
 		Uri: {
 			joinPath(uri, ...parts) { return parts.join('/'); },
-			file(value) { return { fsPath: value }; }
+			file(value) { return { fsPath: value }; },
+			parse(value) { return { toString() { return value; } }; }
+		},
+		env: {
+			async openExternal(uri) { opened.push(uri.toString()); }
 		}
 	};
 	const modules = {
@@ -58,7 +63,7 @@ function loadExtension(pluginContent, options = {}) {
 	});
 	provider.cliBinary = '';
 	provider.view = { webview: { postMessage(message) { messages.push(message); } } };
-	return { provider, responses, requests, messages, errors, renamed, commands };
+	return { provider, responses, requests, messages, errors, renamed, commands, opened };
 }
 
 test('старый плагин отключается с сохранением резервной копии', () => {
@@ -118,6 +123,22 @@ test('панель содержит «Сжать контекст» и не со
 	assert.match(extension, /type === 'closeFull'/);
 	assert.match(extension, /workbench\.action\.closeSidebar/);
 	assert.match(extension, /full-back/);
+});
+
+test('ссылки из web-UI открываются в системном браузере', async () => {
+	const state = loadExtension();
+	await state.provider.onMessage({ type: 'openExternal', url: 'https://auth.openai.com/authorize?client_id=1' });
+	assert.deepEqual(state.opened, ['https://auth.openai.com/authorize?client_id=1']);
+	await state.provider.onMessage({ type: 'openExternal', url: 'javascript:alert(1)' });
+	assert.equal(state.opened.length, 1);
+	const webui = fs.readFileSync(path.join(__dirname, '..', 'webui.js'), 'utf8');
+	assert.match(webui, /opencode-sidebar-open-external/);
+	assert.match(webui, /window\.open=function/);
+	const panel = fs.readFileSync(path.join(__dirname, '..', 'media', 'panel.js'), 'utf8');
+	assert.match(panel, /type: 'openExternal'/);
+	const extension = fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8');
+	assert.match(extension, /env\.openExternal/);
+	assert.match(extension, /opencode-sidebar-open-external/);
 });
 
 test('сравнение версий считает новые релизы новее', () => {

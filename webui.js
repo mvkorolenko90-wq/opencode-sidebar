@@ -224,6 +224,9 @@ function injectConfig(html, password, hostname) {
     'function ti(){try{parent.postMessage({type:"opencode-sidebar-title",title:document.title},"*")}catch(e){}}',
     'var lt="";ti();setInterval(function(){if(document.title!==lt){lt=document.title;ti()}},500);',
     'window.addEventListener("keydown",function(e){try{if((e.ctrlKey||e.metaKey)&&!e.shiftKey&&!e.altKey&&String(e.key).toLowerCase()==="t"){e.preventDefault();e.stopPropagation();parent.postMessage({type:"opencode-sidebar-new-tab"},"*")}}catch(x){}},true);',
+    'function ox(u){try{if(u)parent.postMessage({type:"opencode-sidebar-open-external",url:String(u)},"*")}catch(e){}}',
+    'window.open=function(u){ox(u);return null};',
+    'window.addEventListener("click",function(e){try{var t=e.target;while(t&&t.tagName!=="A")t=t.parentElement;if(!t)return;var href=t.getAttribute("href")||"";if(!/^(https?:|mailto:)/i.test(href))return;var ext=t.target==="_blank";if(!ext){try{ext=new URL(t.href).origin!==location.origin}catch(x){ext=true}}if(!ext)return;e.preventDefault();e.stopPropagation();ox(t.href)}catch(x){}},true);',
     '})();</script><style id="opencode-sidebar-style">[data-slot="titlebar-v2"]{display:none !important}</style>'
   ].join('');
 

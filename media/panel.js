@@ -977,6 +977,14 @@
         return;
       }
 
+      if (message.type === 'opencode-sidebar-open-external') {
+        const url = String(message.url || '');
+        if (/^(https?:|mailto:)/i.test(url)) {
+          vscode.postMessage({ type: 'openExternal', url: url });
+        }
+        return;
+      }
+
       if (message.type === 'opencode-sidebar-route') {
         const tab = tabFromSource(event.source);
         if (!tab) {

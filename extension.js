@@ -436,6 +436,11 @@ class OpencodeViewProvider {
         await this.reloadEmbedded();
       }
 
+      if (message.type === 'openExternal') {
+        await this.openExternal(typeof message.url === 'string' ? message.url : '');
+        return;
+      }
+
       if (message.type === 'openFull') {
         try {
           await this.openFullView(typeof message.url === 'string' ? message.url : '');
@@ -891,6 +896,19 @@ class OpencodeViewProvider {
     this.view.webview.postMessage(message);
   }
 
+  async openExternal(url) {
+    const text = String(url || '').trim();
+    if (!/^(https?:|mailto:)/i.test(text)) {
+      return;
+    }
+    try {
+      await vscode.env.openExternal(vscode.Uri.parse(text, true));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      vscode.window.showErrorMessage('Не удалось открыть ссылку в браузере: ' + message);
+    }
+  }
+
   async checkUpdates() {
     if (this.updating) {
       return;
@@ -1039,6 +1057,10 @@ class OpencodeViewProvider {
     panel.webview.onDidReceiveMessage((message) => {
       if (message && message.type === 'closeFull') {
         panel.dispose();
+        return;
+      }
+      if (message && message.type === 'openExternal') {
+        this.openExternal(typeof message.url === 'string' ? message.url : '');
       }
     });
     panel.onDidDispose(() => {
@@ -1274,8 +1296,12 @@ function renderFullHtml(webview, url) {
   });
   window.addEventListener('message', function (event) {
     var data = event.data;
-    if (data && data.type === 'navigate' && typeof data.url === 'string') {
+    if (!data) return;
+    if (data.type === 'navigate' && typeof data.url === 'string') {
       document.getElementById('frame').src = data.url;
+    }
+    if (data.type === 'opencode-sidebar-open-external' && typeof data.url === 'string') {
+      vscode.postMessage({ type: 'openExternal', url: data.url });
     }
   });
 </script>
