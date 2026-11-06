@@ -334,6 +334,30 @@ test('MCP-сервер добавляется в mcp.servers с резервно
 	assert.equal(backups.length, 1);
 });
 
+test('MCP-сервер создаёт opencode.json, если файла ещё нет', () => {
+	const state = loadRecommended([], null);
+	assert.equal(fs.existsSync(path.join(state.home, '.config', 'opencode', 'opencode.json')), false);
+	const file = state.addMcpServer('cua-driver', { type: 'local', command: ['cua-driver', 'mcp'] });
+	assert.equal(file, path.join(state.home, '.config', 'opencode', 'opencode.json'));
+	const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+	assert.deepEqual(config.mcp.servers['cua-driver'], { type: 'local', command: ['cua-driver', 'mcp'] });
+	const backups = fs.readdirSync(path.join(state.home, '.config', 'opencode')).filter((name) => name.startsWith('opencode.json.bak-'));
+	assert.equal(backups.length, 0);
+});
+
+test('установка opencode использует официальный установщик без npm', () => {
+	const source = fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8');
+	assert.match(source, /curl -fsSL https:\/\/opencode\.ai\/v2\/install \| bash/);
+	assert.doesNotMatch(source, /npm install -g @opencode\/cli/);
+});
+
+test('рабочая папка добавляется в проекты web-UI без повторного выбора', () => {
+	const source = fs.readFileSync(path.join(__dirname, '..', 'webui.js'), 'utf8');
+	assert.match(source, /registerLocation/);
+	assert.match(source, /usedProjectIDs/);
+	assert.match(source, /lastProjectID/);
+});
+
 test('graphify и find-skills устанавливаются через приложение', () => {
 	for (const id of ['graphify', 'find-skills']) {
 		const state = loadRecommended([{ id }]);

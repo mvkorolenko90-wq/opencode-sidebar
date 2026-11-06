@@ -40,6 +40,7 @@ function pathEntries() {
     entries.push(
       path.join(appData, 'npm'),
       path.join(localAppData, 'node'),
+      path.join(localAppData, 'opencode', 'bin'),
       path.join(localAppData, 'Programs', 'nodejs'),
       path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs'),
       path.join(home, '.local', 'bin')
@@ -146,6 +147,32 @@ function requirementSteps(entry) {
   return steps;
 }
 
+// Официальный установщик opencode: на Linux/macOS — shell-скрипт, на Windows —
+// готовый бинарник (пакетные менеджеры Windows официально не поддерживаются).
+// Node.js/npm пользователю не нужны.
+function opencodeInstallCommand() {
+  if (process.platform !== 'win32') {
+    return 'curl -fsSL https://opencode.ai/v2/install | bash';
+  }
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    "$arch=if($env:PROCESSOR_ARCHITECTURE -eq 'ARM64'){'arm64'}else{'x64'}",
+    "$dir=Join-Path $env:LOCALAPPDATA 'opencode'",
+    "$bin=Join-Path $dir 'bin'",
+    "$zip=Join-Path $env:TEMP 'opencode-cli.zip'",
+    'New-Item -ItemType Directory -Force -Path $bin | Out-Null',
+    "Invoke-WebRequest ('https://opencode.ai/update/api/latest/cli/opencode/opencode-windows-'+$arch+'.zip') -OutFile $zip",
+    'Expand-Archive -Path $zip -DestinationPath $dir -Force',
+    "$exe=Get-ChildItem -Path $dir -Recurse -Filter 'opencode.exe' | Select-Object -First 1",
+    "Copy-Item $exe.FullName (Join-Path $bin 'opencode.exe') -Force",
+    "$userPath=[Environment]::GetEnvironmentVariable('Path','User')",
+    "if($userPath -notlike ('*'+$bin+'*')){[Environment]::SetEnvironmentVariable('Path',($userPath.TrimEnd(';')+';'+$bin),'User')}",
+    "$env:Path=($bin+';'+$env:Path)",
+    'Remove-Item $zip -Force'
+  ].join('; ');
+  return 'powershell -NoProfile -ExecutionPolicy Bypass -Command "' + script + '"';
+}
+
 function runSetupCommand(command) {
   return new Promise((resolve, reject) => {
     const isWin = process.platform === 'win32';
@@ -179,8 +206,7 @@ function runSetupCommand(command) {
 }
 
 function addMcpServer(name, definition) {
-  const file = opencodeConfigPath();
-  const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const config = readOpencodeConfig();
   if (config.mcp && !config.mcp.servers && typeof config.mcp === 'object') {
     config.mcp[name] = definition;
   } else if (config.mcpServers && !config.mcp) {
@@ -190,10 +216,7 @@ function addMcpServer(name, definition) {
     config.mcp.servers = config.mcp.servers || {};
     config.mcp.servers[name] = definition;
   }
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  fs.copyFileSync(file, file + '.bak-' + stamp);
-  fs.writeFileSync(file, JSON.stringify(config, null, '\t') + '\n', 'utf8');
-  return file;
+  return writeOpencodeConfig(config);
 }
 
 function readManifest(extensionUri) {
@@ -254,9 +277,44 @@ function opencodeConfigPath() {
   return path.join(os.homedir(), '.config', 'opencode', 'opencode.json');
 }
 
+// Конфиг opencode может отсутствовать на чистой машине. Читаем его как пустой
+// объект, а при записи сами создаём папку и файл. Резервная копия делается
+// только если файл уже был.
+function readOpencodeConfig() {
+  const file = opencodeConfigPath();
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return {};
+    }
+    throw error;
+  }
+  if (!raw.trim()) {
+    return {};
+  }
+  const config = JSON.parse(raw);
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error('Некорректный конфиг opencode: ожидается JSON-объект в ' + file);
+  }
+  return config;
+}
+
+function writeOpencodeConfig(config) {
+  const file = opencodeConfigPath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  if (fs.existsSync(file)) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.copyFileSync(file, file + '.bak-' + stamp);
+  }
+  fs.writeFileSync(file, JSON.stringify(config, null, '\t') + '\n', 'utf8');
+  return file;
+}
+
 function readAgentEntry(id) {
   try {
-    const config = JSON.parse(fs.readFileSync(opencodeConfigPath(), 'utf8'));
+    const config = readOpencodeConfig();
     const list = config.agents || config.agent || {};
     return list[id] || null;
   } catch {
@@ -273,20 +331,16 @@ function installAgent(extensionUri, id) {
     throw new Error('Агент не найден в пакете расширения: ' + id);
   }
   const definition = JSON.parse(fs.readFileSync(source, 'utf8'));
-  const file = opencodeConfigPath();
-  const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const config = readOpencodeConfig();
   const key = config.agents ? 'agents' : (config.agent ? 'agent' : 'agents');
   config[key] = config[key] || {};
   config[key][id] = { ...(config[key][id] || {}), ...definition };
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  fs.copyFileSync(file, file + '.bak-' + stamp);
-  fs.writeFileSync(file, JSON.stringify(config, null, '\t') + '\n', 'utf8');
-  return file;
+  return writeOpencodeConfig(config);
 }
 
 function readDefaultAgent() {
   try {
-    const config = JSON.parse(fs.readFileSync(opencodeConfigPath(), 'utf8'));
+    const config = readOpencodeConfig();
     return config.default_agent ? String(config.default_agent) : 'build';
   } catch {
     return 'build';
@@ -297,12 +351,9 @@ function setDefaultModel(providerID, modelID) {
   if (!providerID || !modelID) {
     throw new Error('Не указана модель.');
   }
-  const file = opencodeConfigPath();
-  const config = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const config = readOpencodeConfig();
   config.model = providerID + '/' + modelID;
-  fs.copyFileSync(file, file + '.bak-' + stamp);
-  fs.writeFileSync(file, JSON.stringify(config, null, '\t') + '\n', 'utf8');
+  writeOpencodeConfig(config);
   return config.model;
 }
 
@@ -310,13 +361,9 @@ function setDefaultAgent(id) {
   if (!/^[a-z0-9][a-z0-9-]*$/i.test(id)) {
     throw new Error('Некорректное имя агента.');
   }
-  const file = opencodeConfigPath();
-  const config = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const config = readOpencodeConfig();
   config.default_agent = id;
-  fs.copyFileSync(file, file + '.bak-' + stamp);
-  fs.writeFileSync(file, JSON.stringify(config, null, '\t') + '\n', 'utf8');
-  return file;
+  return writeOpencodeConfig(config);
 }
 
 function skillInstalled(id) {
@@ -454,7 +501,7 @@ class OpencodeViewProvider {
       if (message.type === 'installOpencode') {
         const terminal = vscode.window.createTerminal({ name: 'opencode install' });
         terminal.show();
-        terminal.sendText('npm install -g @opencode/cli@latest');
+        terminal.sendText(opencodeInstallCommand());
         return;
       }
 
@@ -1006,7 +1053,7 @@ class OpencodeViewProvider {
       this.webUiStarting = (async () => {
         const detected = await detectCli();
         if (!detected.found) {
-          const error = new Error('opencode не установлен. Поставьте CLI командой «npm install -g @opencode/cli@latest» или с https://opencode.ai, затем нажмите «Повторить».');
+          const error = new Error('opencode не установлен. Нажмите «Установить opencode» — официальный установщик не требует Node.js. После установки нажмите «Повторить».');
           error.installable = true;
           throw error;
         }

@@ -201,13 +201,14 @@ function decodeBody(buffer, encoding) {
   return buffer;
 }
 
-function injectConfig(html, password, hostname) {
+function injectConfig(html, password, hostname, directory) {
   const script = [
     '<script>(function(){try{',
     'try{if(!localStorage.getItem("opencode-sidebar-reset")){localStorage.clear();localStorage.setItem("opencode-sidebar-reset","1")}}catch(e){}',
     'var o=location.origin;',
     'var p=' + JSON.stringify(password) + ';',
     'var h=' + JSON.stringify(hostname) + ';',
+    'var d=' + JSON.stringify(String(directory || '')) + ';',
     'var key="opencode.global.dat:server";',
     'var s={};try{var raw=localStorage.getItem(key);if(raw)s=JSON.parse(raw)||{}}catch(e){}',
     'if(!s||typeof s!=="object")s={};',
@@ -216,6 +217,13 @@ function injectConfig(html, password, hostname) {
     's.list.unshift({type:"http",http:{url:o,password:p}});',
     'if(!s.hidden)s.hidden={};if(!s.lastProjectID)s.lastProjectID={};',
     'if(!s.usedProjectIDs)s.usedProjectIDs={};if(!s.projects)s.projects={};',
+    // Добавляем папку из VS Code в список проектов web-UI, чтобы не просить
+    // пользователя выбирать её второй раз. Для локального сервера scope = local.
+    'if(d){["local",o].forEach(function(sc){',
+    'var u=s.usedProjectIDs[sc];if(!Array.isArray(u))u=[];',
+    'if(u.indexOf(d)<0)u.push(d);s.usedProjectIDs[sc]=u;',
+    's.lastProjectID[sc]=d;',
+    '});}',
     'if(!s.hostnames)s.hostnames={};s.hostnames[o]=h;',
     'localStorage.setItem(key,JSON.stringify(s));',
     '}catch(e){console.error("opencode-sidebar:",e)}',
@@ -268,7 +276,7 @@ function proxyBase(server) {
   return 'http://127.0.0.1:' + (address && address.port ? address.port : 0);
 }
 
-function handleProxyResponse(res, proxyRes, server, service, onEvent) {
+function handleProxyResponse(res, proxyRes, server, service, options = {}) {
   const headers = sanitizeResponseHeaders(proxyRes.headers);
   if (headers.location && headers.location.startsWith(service.upstream.origin)) {
     headers.location = headers.location.replace(service.upstream.origin, proxyBase(server));
@@ -277,7 +285,7 @@ function handleProxyResponse(res, proxyRes, server, service, onEvent) {
   const contentType = String(headers['content-type'] || '');
   if (contentType.includes('text/event-stream')) {
     res.writeHead(proxyRes.statusCode || 502, headers);
-    if (onEvent) {
+    if (options.onEvent) {
       let buffer = '';
       proxyRes.on('data', (chunk) => {
         buffer += chunk.toString('utf8');
@@ -297,7 +305,7 @@ function handleProxyResponse(res, proxyRes, server, service, onEvent) {
           } catch {
             data = null;
           }
-          onEvent({ event: eventLine ? eventLine.slice(6).trim() : '', data });
+          options.onEvent({ event: eventLine ? eventLine.slice(6).trim() : '', data });
           index = buffer.indexOf('\n\n');
         }
       });
@@ -319,7 +327,7 @@ function handleProxyResponse(res, proxyRes, server, service, onEvent) {
     let body = decoded.toString('utf8');
     body = body.replace(/<meta[^>]+http-equiv=["']?content-security-policy["']?[^>]*>/gi, '');
     body = body.split(service.upstream.origin).join(proxyBase(server));
-    body = injectConfig(body, service.password, os.hostname());
+    body = injectConfig(body, service.password, os.hostname(), options.directory);
 
     delete headers['content-security-policy'];
     delete headers['content-security-policy-report-only'];
@@ -390,7 +398,7 @@ async function startProxy(service, options = {}) {
       method: req.method,
       headers: buildUpstreamHeaders(req, service.upstream),
       agent: false
-    }, (proxyRes) => handleProxyResponse(res, proxyRes, server, service, options.onEvent));
+    }, (proxyRes) => handleProxyResponse(res, proxyRes, server, service, options));
 
     proxyReq.on('socket', (socket) => {
       upstreamSockets.add(socket);
@@ -470,9 +478,53 @@ async function startProxy(service, options = {}) {
   };
 }
 
+// Сообщаем сервису opencode рабочую папку VS Code, чтобы проект появился в
+// списке без ручного «добавить проект». Ошибка не критична: сервис мог уже
+// знать папку, а панель должна открыться в любом случае.
+function registerLocation(service, directory) {
+  return new Promise((resolve) => {
+    if (!directory) {
+      resolve();
+      return;
+    }
+    let url;
+    try {
+      url = new URL('/api/location', service.upstream.origin);
+      url.searchParams.set('location[directory]', directory);
+    } catch {
+      resolve();
+      return;
+    }
+    const client = url.protocol === 'https:' ? https : http;
+    const headers = { accept: 'application/json' };
+    if (service.password) {
+      headers.authorization = 'Basic ' + Buffer.from('opencode:' + service.password).toString('base64');
+    }
+    const req = client.request({
+      hostname: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
+      path: url.pathname + url.search,
+      method: 'GET',
+      headers,
+      agent: false
+    }, (res) => {
+      res.resume();
+      res.on('end', resolve);
+      res.on('error', resolve);
+    });
+    req.setTimeout(5000, () => {
+      req.destroy();
+      resolve();
+    });
+    req.on('error', () => resolve());
+    req.end();
+  });
+}
+
 async function startOpencodeWebUi(options = {}) {
   const service = await resolveService(options.binary || '', options.cwd);
-  return startProxy(service, { port: options.port, onEvent: options.onEvent });
+  await registerLocation(service, options.cwd);
+  return startProxy(service, { port: options.port, onEvent: options.onEvent, directory: options.cwd });
 }
 
 async function apiGet(binary, cwd, apiPath) {
