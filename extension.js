@@ -236,10 +236,17 @@ function manifestEntry(extensionUri, id) {
 function readRecommended(extensionUri) {
   return readManifest(extensionUri).map((item) => {
     const id = String(item.id || '');
-    const type = item.type === 'agent' ? 'agent' : 'skill';
-    const installed = type === 'agent'
-      ? Boolean(id && readAgentEntry(id))
-      : Boolean(id) && fs.existsSync(path.join(globalSkillsDir(), id, 'SKILL.md'));
+    const type = item.type === 'agent' ? 'agent' : (item.type === 'mcp' ? 'mcp' : 'skill');
+    const mcpName = item.requires && item.requires.mcp ? String(item.requires.mcp) : '';
+    let installed;
+    if (type === 'agent') {
+      installed = Boolean(id && readAgentEntry(id));
+    } else if (type === 'mcp') {
+      // Пункт без файлов скилла: установлен, если MCP уже прописан в конфиге.
+      installed = Boolean(mcpName) && hasMcpServer(mcpName);
+    } else {
+      installed = Boolean(id) && fs.existsSync(path.join(globalSkillsDir(), id, 'SKILL.md'));
+    }
     const missing = unmetRequirements(item.requires);
     const steps = requirementSteps(item);
     const setup = item.setup && typeof item.setup === 'object' ? item.setup : {};
@@ -924,14 +931,17 @@ class OpencodeViewProvider {
       done.push('MCP ' + requires.mcp);
     }
 
-    // 3. Сам рекомендуемый пакет — скилл или агент.
-    this.post({ type: 'recommendedProgress', id: id, text: 'Устанавливаю пакет…' });
-    if (entry.type === 'agent') {
-      installAgent(this.extensionUri, id);
-    } else {
-      installSkill(this.extensionUri, id);
+    // 3. Сам рекомендуемый пакет — скилл или агент. У пункта с типом mcp
+    // файлов нет: всё делает шаг 2.
+    if (entry.type !== 'mcp') {
+      this.post({ type: 'recommendedProgress', id: id, text: 'Устанавливаю пакет…' });
+      if (entry.type === 'agent') {
+        installAgent(this.extensionUri, id);
+      } else {
+        installSkill(this.extensionUri, id);
+      }
+      done.push(entry.type === 'agent' ? 'агент' : 'скилл');
     }
-    done.push(entry.type === 'agent' ? 'агент' : 'скилл');
 
     return { done: done, missing: unmetRequirements(requires) };
   }

@@ -318,6 +318,45 @@ test('скилл без требований считается установл
 	assert.equal(item.ready, true);
 });
 
+test('пункт типа mcp считается установленным по записи в конфиге', () => {
+	const entry = {
+		id: 'context7',
+		type: 'mcp',
+		requires: { mcp: 'context7' },
+		setup: { mcp: { type: 'remote', url: 'https://mcp.context7.com/mcp', enabled: true } }
+	};
+	const missing = loadRecommended([entry], null);
+	const before = missing.readRecommended({ fsPath: missing.extension })[0];
+	assert.equal(before.installed, false);
+	assert.equal(before.fixable, true);
+	assert.equal(before.plan.join(' | '), 'MCP context7');
+	assert.equal(before.ready, false);
+
+	const withConfig = loadRecommended([entry], ({ home }) => {
+		fs.mkdirSync(path.join(home, '.config', 'opencode'), { recursive: true });
+		fs.writeFileSync(
+			path.join(home, '.config', 'opencode', 'opencode.json'),
+			JSON.stringify({ mcp: { context7: { type: 'remote', url: 'https://mcp.context7.com/mcp' } } })
+		);
+	});
+	const after = withConfig.readRecommended({ fsPath: withConfig.extension })[0];
+	assert.equal(after.installed, true);
+	assert.equal(after.ready, true);
+	assert.equal(after.missing.length, 0);
+	// Скилл-файлов у mcp-пункта нет: установка не должна их требовать.
+	assert.equal(fs.existsSync(path.join(withConfig.home, '.config', 'opencode', 'skills', 'context7')), false);
+});
+
+test('в манифесте есть Context7 как MCP-пункт', () => {
+	const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'skills', 'manifest.json'), 'utf8'));
+	const entry = manifest.skills.find((item) => item.id === 'context7');
+	assert.ok(entry);
+	assert.equal(entry.type, 'mcp');
+	assert.equal(entry.requires.mcp, 'context7');
+	assert.equal(entry.setup.mcp.type, 'remote');
+	assert.equal(entry.setup.mcp.url, 'https://mcp.context7.com/mcp');
+});
+
 test('MCP-сервер добавляется в mcp.servers с резервной копией', () => {
 	const state = loadRecommended([], ({ home }) => {
 		fs.mkdirSync(path.join(home, '.config', 'opencode'), { recursive: true });

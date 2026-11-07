@@ -621,14 +621,18 @@
         const missing = Array.isArray(item.missing) ? item.missing : [];
         const plan = Array.isArray(item.plan) && item.plan.length ? item.plan : missing;
         const needsDeps = missing.length > 0;
+        const isMcp = item.type === 'mcp';
         action.textContent = item.installed
-          ? (needsDeps ? 'Обновить и настроить' : 'Обновить')
-          : (needsDeps ? 'Установить с зависимостями' : 'Установить');
+          ? (isMcp ? 'Подключён' : (needsDeps ? 'Обновить и настроить' : 'Обновить'))
+          : (isMcp ? 'Подключить' : (needsDeps ? 'Установить с зависимостями' : 'Установить'));
+        if (isMcp && item.installed) {
+          action.disabled = true;
+        }
 
         const status = document.createElement('span');
         status.className = 'rec-status' + (item.ready ? ' ok' : (missing.length ? ' warn' : ''));
         status.textContent = item.ready
-          ? 'установлен'
+          ? (isMcp ? 'подключён' : 'установлен')
           : (missing.length ? 'не хватает: ' + plan.join(' · ') : '');
 
         const depBox = document.createElement('div');

@@ -54,6 +54,20 @@
       "description": "Готовый бот @grinev/opencode-telegram-bot: установка одной командой на Windows и Linux, запуск, остановка и выбор рабочей папки через /projects и /open. История задач остаётся в проекте OpenCode."
     },
     {
+      "id": "context7",
+      "type": "mcp",
+      "title": "Context7 — актуальная документация библиотек",
+      "description": "MCP-сервер Context7: по запросу находит свежую документацию и примеры по библиотекам и фреймворкам вместо устаревших знаний модели. Ключ не обязателен, запись добавляется в конфиг opencode.",
+      "requires": { "mcp": "context7" },
+      "setup": {
+        "mcp": {
+          "type": "remote",
+          "url": "https://mcp.context7.com/mcp",
+          "enabled": true
+        }
+      }
+    },
+    {
       "id": "orchestrator",
       "type": "agent",
       "title": "Orchestrator — несколько агентов",
