@@ -65,3 +65,7 @@ npx @grinev/opencode-telegram-bot@latest
    - Windows: `%APPDATA%\opencode-telegram-bot\logs\`
    - Linux: `~/.config/opencode-telegram-bot/logs/`
 4. Ошибка авторизации OpenCode V2 — проверьте `opencode service get password` и `OPENCODE_SERVER_PASSWORD` в `.env`.
+5. `opencode-telegram: command not found` — установщик ставит бинарник в `$(npm config get prefix)/bin` и создаёт ссылку в первый доступный каталог `PATH` (обычно `~/.local/bin`). Перезайдите в терминал или выполните:
+   ```bash
+   export PATH="$(npm config get prefix)/bin:$PATH"
+   ```
